@@ -76,5 +76,42 @@ namespace nirmana.Rendering
             v.Add(b.X); v.Add(b.Y); v.Add(b.Z);
             v.Add(color.X); v.Add(color.Y); v.Add(color.Z);
         }
+
+        /// <summary>
+        /// Gizmo translate dalam local space (origin di 0,0,0). Diposisikan
+        /// ke objek terpilih lewat uModel saat digambar, jadi tidak perlu
+        /// dibangun ulang tiap frame.
+        /// </summary>
+        public static LineRenderer CreateTranslateGizmo(float length)
+        {
+            List<float> v = new List<float>();
+
+            Vector3 xColor = new Vector3(1f, 0.25f, 0.25f);
+            Vector3 yColor = new Vector3(0.25f, 1f, 0.25f);
+            Vector3 zColor = new Vector3(0.3f, 0.5f, 1f);
+
+            // Batang panah utama
+            AddLine(v, Vector3.Zero, new Vector3(length, 0, 0), xColor);
+            AddLine(v, Vector3.Zero, new Vector3(0, length, 0), yColor);
+            AddLine(v, Vector3.Zero, new Vector3(0, 0, length), zColor);
+
+            // Tanda kepala panah kecil (cross) di ujung supaya gampang dibedakan dari batang
+            float tip = length;
+            float headSize = length * 0.12f;
+
+            AddLine(v, new Vector3(tip, 0, 0), new Vector3(tip - headSize, headSize, 0), xColor);
+            AddLine(v, new Vector3(tip, 0, 0), new Vector3(tip - headSize, -headSize, 0), xColor);
+            AddLine(v, new Vector3(tip, 0, 0), new Vector3(tip - headSize, 0, headSize), xColor);
+
+            AddLine(v, new Vector3(0, tip, 0), new Vector3(headSize, tip - headSize, 0), yColor);
+            AddLine(v, new Vector3(0, tip, 0), new Vector3(-headSize, tip - headSize, 0), yColor);
+            AddLine(v, new Vector3(0, tip, 0), new Vector3(0, tip - headSize, headSize), yColor);
+
+            AddLine(v, new Vector3(0, 0, tip), new Vector3(headSize, 0, tip - headSize), zColor);
+            AddLine(v, new Vector3(0, 0, tip), new Vector3(-headSize, 0, tip - headSize), zColor);
+            AddLine(v, new Vector3(0, 0, tip), new Vector3(0, headSize, tip - headSize), zColor);
+
+            return new LineRenderer(v.ToArray());
+        }
     }
 }
