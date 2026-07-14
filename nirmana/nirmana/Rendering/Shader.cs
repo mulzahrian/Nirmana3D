@@ -114,6 +114,8 @@ in vec2 vTexCoord;
 uniform vec3 uLightDir;
 uniform vec3 uObjectColor;
 uniform vec3 uViewPos;
+uniform sampler2D uTexture;
+uniform int uUseTexture;
 
 out vec4 FragColor;
 
@@ -121,6 +123,12 @@ void main()
 {
     vec3 normal = normalize(vNormal);
     vec3 lightDir = normalize(-uLightDir);
+
+    vec3 baseColor = uObjectColor;
+    if (uUseTexture == 1)
+    {
+        baseColor = texture(uTexture, vTexCoord).rgb * uObjectColor;
+    }
 
     float ambientStrength = 0.25;
     vec3 ambient = ambientStrength * vec3(1.0);
@@ -133,7 +141,7 @@ void main()
     float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
     vec3 specular = spec * 0.2 * vec3(1.0);
 
-    vec3 result = (ambient + diffuse + specular) * uObjectColor;
+    vec3 result = (ambient + diffuse + specular) * baseColor;
     FragColor = vec4(result, 1.0);
 }
 ";

@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using OpenTK;
 
@@ -69,6 +70,23 @@ namespace nirmana.Rendering
             return sum / face.Indices.Count;
         }
 
+        /// <summary>
+        /// Box/planar UV projection sederhana: pilih plane proyeksi berdasarkan
+        /// sumbu mana yang paling dominan di normal face, lalu pakai 2
+        /// koordinat lainnya sebagai U/V. Cukup untuk tekstur simpel tanpa
+        /// perlu UV unwrap manual.
+        /// </summary>
+        private static Vector2 ComputeBoxUV(Vector3 pos, Vector3 normal)
+        {
+            float absX = Math.Abs(normal.X);
+            float absY = Math.Abs(normal.Y);
+            float absZ = Math.Abs(normal.Z);
+
+            if (absX >= absY && absX >= absZ) return new Vector2(pos.Z, pos.Y);
+            if (absY >= absX && absY >= absZ) return new Vector2(pos.X, pos.Z);
+            return new Vector2(pos.X, pos.Y);
+        }
+
         /// <summary>Titik tengah seleksi saat ini (untuk posisi gizmo).</summary>
         public Vector3 SelectionCentroid(bool faceMode)
         {
@@ -105,9 +123,11 @@ namespace nirmana.Rendering
                 for (int k = 0; k < n; k++)
                 {
                     Vector3 p = Vertices[face.Indices[k]];
+                    Vector2 uv = ComputeBoxUV(p, normal);
+
                     verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
                     verts.Add(normal.X); verts.Add(normal.Y); verts.Add(normal.Z);
-                    verts.Add(0f); verts.Add(0f); // uv placeholder, diisi di Fase 3 (texturing)
+                    verts.Add(uv.X); verts.Add(uv.Y);
                 }
 
                 for (int k = 1; k < n - 1; k++) // triangulasi fan, cukup untuk tri & convex quad

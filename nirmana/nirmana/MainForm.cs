@@ -37,6 +37,7 @@ namespace nirmana
             public Vector3 BoundsMin; // local space, sebelum translasi
             public Vector3 BoundsMax;
             public Vector3 Color;
+            public Texture Texture; // null kalau belum ada texture
 
             public Matrix4 GetModelMatrix() => Matrix4.CreateTranslation(Position);
         }
@@ -95,8 +96,13 @@ namespace nirmana
             addMenu.DropDownItems.Add("Sphere", null, (s, e) =>
                 AddObject(Primitives.CreateSphere(1f), null, "Sphere", Vector3.Zero, new Vector3(-1f), new Vector3(1f)));
 
+            ToolStripMenuItem materialMenu = new ToolStripMenuItem("Material");
+            materialMenu.DropDownItems.Add("Load Texture...", null, (s, e) => LoadTextureForSelected());
+            materialMenu.DropDownItems.Add("Remove Texture", null, (s, e) => RemoveTextureFromSelected());
+
             menu.Items.Add(fileMenu);
             menu.Items.Add(addMenu);
+            menu.Items.Add(materialMenu);
 
             MainMenuStrip = menu;
             Controls.Add(menu);
@@ -174,6 +180,41 @@ namespace nirmana
             _isEditMode = false;
         }
 
+        private void LoadTextureForSelected()
+        {
+            if (_selectedObject == null)
+            {
+                MessageBox.Show("Pilih objek dulu sebelum load texture.", "Info");
+                return;
+            }
+
+            using (OpenFileDialog dialog = new OpenFileDialog
+            {
+                Filter = "Image Files|*.png;*.jpg;*.jpeg;*.bmp",
+                Title = "Pilih texture untuk objek terpilih"
+            })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+                try
+                {
+                    _selectedObject.Texture?.Dispose();
+                    _selectedObject.Texture = new Texture(dialog.FileName);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Gagal load texture: " + ex.Message, "Error");
+                }
+            }
+        }
+
+        private void RemoveTextureFromSelected()
+        {
+            if (_selectedObject?.Texture == null) return;
+            _selectedObject.Texture.Dispose();
+            _selectedObject.Texture = null;
+        }
+
         // ---------- Render ----------
 
         private void Render()
@@ -204,6 +245,17 @@ namespace nirmana
                 Vector3 renderColor = tintSelected
                     ? Vector3.Lerp(obj.Color, new Vector3(1f, 0.55f, 0.15f), 0.5f)
                     : obj.Color;
+
+                if (obj.Texture != null)
+                {
+                    obj.Texture.Bind();
+                    _basicShader.SetInt("uTexture", 0);
+                    _basicShader.SetInt("uUseTexture", 1);
+                }
+                else
+                {
+                    _basicShader.SetInt("uUseTexture", 0);
+                }
 
                 _basicShader.SetMatrix4("uModel", obj.GetModelMatrix());
                 _basicShader.SetVector3("uObjectColor", renderColor);
@@ -360,6 +412,7 @@ namespace nirmana
             {
                 _sceneObjects.Remove(_selectedObject);
                 _selectedObject.Mesh.Dispose();
+                _selectedObject.Texture?.Dispose();
                 _selectedObject = null;
             }
         }
