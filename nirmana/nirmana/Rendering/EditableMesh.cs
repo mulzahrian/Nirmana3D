@@ -179,6 +179,110 @@ namespace nirmana.Rendering
             return edgeMap.Select(kvp => (Vertices[kvp.Key.Item1], Vertices[kvp.Key.Item2], kvp.Value)).ToList();
         }
 
+        // ---------- Subdivide ----------
+
+        /// <summary>
+        /// Subdivide face yang sedang terpilih jadi 4 face lebih kecil.
+        /// Untuk quad: tambah 4 titik tengah edge + 1 titik tengah face (jadi 4 quad baru).
+        /// Untuk triangle: tambah 3 titik tengah edge (jadi 4 triangle baru, tanpa titik tengah).
+        /// </summary>
+        public void SubdivideSelectedFace()
+        {
+            if (SelectedFace < 0 || SelectedFace >= Faces.Count) return;
+
+            List<Face> newFaces = SubdivideFaceInternal(Faces[SelectedFace]);
+            if (newFaces == null) return; // n-gon selain tri/quad belum didukung
+
+            Faces.RemoveAt(SelectedFace);
+            Faces.InsertRange(SelectedFace, newFaces);
+            SelectedFace = -1; // face lama sudah tergantikan 4 face baru
+        }
+
+        /// <summary>
+        /// Subdivide seluruh face di mesh sekaligus. Edge yang dipakai bersama
+        /// 2 face (misal antar sisi kubus) memakai titik tengah yang sama,
+        /// jadi hasilnya tetap rapat/tidak ada celah di sambungan antar sisi.
+        /// </summary>
+        public void SubdivideAll()
+        {
+            Dictionary<(int, int), int> edgeMidpoint = new Dictionary<(int, int), int>();
+            List<Face> newFaces = new List<Face>();
+
+            foreach (Face face in Faces)
+            {
+                List<Face> sub = SubdivideFaceInternal(face, edgeMidpoint);
+                newFaces.AddRange(sub ?? new List<Face> { face });
+            }
+
+            Faces = newFaces;
+            SelectedVertices.Clear();
+            SelectedFace = -1;
+        }
+
+        private List<Face> SubdivideFaceInternal(Face face, Dictionary<(int, int), int> sharedMidpoints = null)
+        {
+            int n = face.Indices.Count;
+
+            int Midpoint(int a, int b)
+            {
+                if (sharedMidpoints != null)
+                {
+                    var key = a < b ? (a, b) : (b, a);
+                    if (sharedMidpoints.TryGetValue(key, out int existing)) return existing;
+                    int created = AddMidpointVertex(a, b);
+                    sharedMidpoints[key] = created;
+                    return created;
+                }
+                return AddMidpointVertex(a, b);
+            }
+
+            if (n == 4)
+            {
+                int a = face.Indices[0], b = face.Indices[1], c = face.Indices[2], d = face.Indices[3];
+                int mAB = Midpoint(a, b);
+                int mBC = Midpoint(b, c);
+                int mCD = Midpoint(c, d);
+                int mDA = Midpoint(d, a);
+
+                Vector3 centerPos = (Vertices[a] + Vertices[b] + Vertices[c] + Vertices[d]) / 4f;
+                Vertices.Add(centerPos);
+                int center = Vertices.Count - 1;
+
+                return new List<Face>
+                {
+                    new Face { Indices = new List<int> { a, mAB, center, mDA } },
+                    new Face { Indices = new List<int> { mAB, b, mBC, center } },
+                    new Face { Indices = new List<int> { center, mBC, c, mCD } },
+                    new Face { Indices = new List<int> { mDA, center, mCD, d } },
+                };
+            }
+
+            if (n == 3)
+            {
+                int a = face.Indices[0], b = face.Indices[1], c = face.Indices[2];
+                int mAB = Midpoint(a, b);
+                int mBC = Midpoint(b, c);
+                int mCA = Midpoint(c, a);
+
+                return new List<Face>
+                {
+                    new Face { Indices = new List<int> { a, mAB, mCA } },
+                    new Face { Indices = new List<int> { mAB, b, mBC } },
+                    new Face { Indices = new List<int> { mCA, mBC, c } },
+                    new Face { Indices = new List<int> { mAB, mBC, mCA } },
+                };
+            }
+
+            return null;
+        }
+
+        private int AddMidpointVertex(int a, int b)
+        {
+            Vector3 mid = (Vertices[a] + Vertices[b]) * 0.5f;
+            Vertices.Add(mid);
+            return Vertices.Count - 1;
+        }
+
         // ---------- Extrude ----------
 
         /// <summary>

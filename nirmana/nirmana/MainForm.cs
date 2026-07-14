@@ -80,6 +80,7 @@ namespace nirmana
 
         private List<int> _dragEditIndices;
         private Dictionary<int, Vector3> _dragEditStartPositions;
+        private Vector3 _dragEditCentroidLocal;
 
         public MainForm()
         {
@@ -280,7 +281,7 @@ namespace nirmana
 
             bool editModeActive = _isEditMode && _selectedObject?.EditMesh != null;
             bool faceMode = _editSelectionMode == EditSelectionMode.Face;
-            GizmoMode effectiveGizmoMode = editModeActive ? GizmoMode.Translate : _gizmoMode;
+            GizmoMode effectiveGizmoMode = _gizmoMode;
 
             bool hasGizmo = editModeActive
                 ? _selectedObject.EditMesh.HasSelection(faceMode)
@@ -295,7 +296,7 @@ namespace nirmana
 
                 if (editModeActive)
                 {
-                    _lineShader.SetMatrix4("uModel", Matrix4.CreateTranslation(_selectedObject.Position));
+                    _lineShader.SetMatrix4("uModel", _selectedObject.GetModelMatrix());
                     _editWireframe.Draw(PrimitiveType.Lines);
 
                     if (!faceMode)
@@ -401,13 +402,10 @@ namespace nirmana
                 return;
             }
 
-            // Gizmo mode hanya berlaku di Object Mode (Edit Mode dipaksa Translate).
-            if (!_isEditMode)
-            {
-                if (e.KeyCode == Keys.G) { _gizmoMode = GizmoMode.Translate; return; }
-                if (e.KeyCode == Keys.R) { _gizmoMode = GizmoMode.Rotate; return; }
-                if (e.KeyCode == Keys.S) { _gizmoMode = GizmoMode.Scale; return; }
-            }
+            // Gizmo mode sekarang berlaku di Object Mode maupun Edit Mode.
+            if (e.KeyCode == Keys.G) { _gizmoMode = GizmoMode.Translate; return; }
+            if (e.KeyCode == Keys.R) { _gizmoMode = GizmoMode.Rotate; return; }
+            if (e.KeyCode == Keys.S) { _gizmoMode = GizmoMode.Scale; return; }
 
             if (_isEditMode && _selectedObject?.EditMesh != null)
             {
@@ -419,6 +417,16 @@ namespace nirmana
                 if (e.KeyCode == Keys.E && _editSelectionMode == EditSelectionMode.Face && em.SelectedFace >= 0)
                 {
                     em.ExtrudeSelectedFace();
+                    RebuildFromEditMesh(_selectedObject);
+                    RefreshEditVisuals();
+                    return;
+                }
+
+                if (e.KeyCode == Keys.V && _editSelectionMode == EditSelectionMode.Face)
+                {
+                    if (em.SelectedFace >= 0) em.SubdivideSelectedFace();
+                    else em.SubdivideAll();
+
                     RebuildFromEditMesh(_selectedObject);
                     RefreshEditVisuals();
                     return;
@@ -645,7 +653,7 @@ namespace nirmana
         {
             bool editMode = _isEditMode && _selectedObject?.EditMesh != null;
             bool faceMode = _editSelectionMode == EditSelectionMode.Face;
-            GizmoMode effectiveMode = editMode ? GizmoMode.Translate : _gizmoMode;
+            GizmoMode effectiveMode = _gizmoMode;
 
             Vector3 origin;
             if (editMode)
@@ -726,6 +734,7 @@ namespace nirmana
                     : new List<int>(_selectedObject.EditMesh.SelectedVertices);
 
                 _dragEditStartPositions = _dragEditIndices.ToDictionary(i => i, i => _selectedObject.EditMesh.Vertices[i]);
+                _dragEditCentroidLocal = _selectedObject.EditMesh.SelectionCentroid(faceMode);
             }
             else
             {
@@ -751,9 +760,17 @@ namespace nirmana
 
                 if (_dragIsEditMode)
                 {
+                    // Delta dihitung di world space (mengikuti arah axis dunia),
+                    // tapi EditMesh.Vertices disimpan di local space objek. Kalau
+                    // objek sudah di-rotate/scale, delta harus dikonversi dulu ke
+                    // local space lewat inverse model matrix, supaya arah &
+                    // jaraknya tetap benar.
+                    Matrix4 invModel = Matrix4.Invert(_selectedObject.GetModelMatrix());
+                    Vector3 localDelta = Vector3.TransformVector(delta, invModel);
+
                     EditableMesh em = _selectedObject.EditMesh;
                     foreach (int idx in _dragEditIndices)
-                        em.Vertices[idx] = _dragEditStartPositions[idx] + delta;
+                        em.Vertices[idx] = _dragEditStartPositions[idx] + localDelta;
 
                     RebuildFromEditMesh(_selectedObject);
                     RefreshEditVisuals();
@@ -765,18 +782,42 @@ namespace nirmana
             }
             else if (_dragGizmoMode == GizmoMode.Scale)
             {
-                // Hanya dipakai di Object Mode (edit mode dipaksa Translate).
                 Vector2 mouseDelta = mousePx - _dragStartMouse;
                 float alongAxis = Vector2.Dot(mouseDelta, _dragScreenAxisDir) * _dragWorldPerPixel;
                 float scaleDelta = alongAxis / GizmoLength;
                 float factor = Math.Max(0.05f, 1f + scaleDelta);
 
-                Vector3 newScale = _dragStartObjectScale;
-                if (_dragAxis == 0) newScale.X = _dragStartObjectScale.X * factor;
-                else if (_dragAxis == 1) newScale.Y = _dragStartObjectScale.Y * factor;
-                else newScale.Z = _dragStartObjectScale.Z * factor;
+                if (_dragIsEditMode)
+                {
+                    // Kerjakan di world space (transform local -> world, scale
+                    // di sekitar centroid, transform balik ke local) supaya tetap
+                    // benar berapa pun rotasi/scale objek induknya saat ini.
+                    Matrix4 model = _selectedObject.GetModelMatrix();
+                    Matrix4 invModel = Matrix4.Invert(model);
+                    Vector3 worldCentroid = Vector3.TransformPosition(_dragEditCentroidLocal, model);
 
-                _selectedObject.Scale = newScale;
+                    EditableMesh em = _selectedObject.EditMesh;
+                    foreach (int idx in _dragEditIndices)
+                    {
+                        Vector3 startWorld = Vector3.TransformPosition(_dragEditStartPositions[idx], model);
+                        Vector3 relWorld = startWorld - worldCentroid;
+                        Vector3 scaledRel = relWorld + axisDir * (Vector3.Dot(relWorld, axisDir) * (factor - 1f));
+                        Vector3 newWorld = worldCentroid + scaledRel;
+                        em.Vertices[idx] = Vector3.TransformPosition(newWorld, invModel);
+                    }
+
+                    RebuildFromEditMesh(_selectedObject);
+                    RefreshEditVisuals();
+                }
+                else
+                {
+                    Vector3 newScale = _dragStartObjectScale;
+                    if (_dragAxis == 0) newScale.X = _dragStartObjectScale.X * factor;
+                    else if (_dragAxis == 1) newScale.Y = _dragStartObjectScale.Y * factor;
+                    else newScale.Z = _dragStartObjectScale.Z * factor;
+
+                    _selectedObject.Scale = newScale;
+                }
             }
             else // Rotate — sudut dihitung dari perubahan arah mouse relatif ke pusat gizmo di screen space
             {
@@ -789,8 +830,31 @@ namespace nirmana
                 float currentAngle = (float)Math.Atan2(currentVec.Y, currentVec.X);
                 float angleDelta = currentAngle - startAngle;
 
-                Quaternion deltaRot = Quaternion.FromAxisAngle(axisDir, angleDelta);
-                _selectedObject.Rotation = Quaternion.Normalize(deltaRot * _dragStartObjectRotation);
+                if (_dragIsEditMode)
+                {
+                    Matrix4 model = _selectedObject.GetModelMatrix();
+                    Matrix4 invModel = Matrix4.Invert(model);
+                    Vector3 worldCentroid = Vector3.TransformPosition(_dragEditCentroidLocal, model);
+                    Quaternion deltaRotWorld = Quaternion.FromAxisAngle(axisDir, angleDelta);
+
+                    EditableMesh em = _selectedObject.EditMesh;
+                    foreach (int idx in _dragEditIndices)
+                    {
+                        Vector3 startWorld = Vector3.TransformPosition(_dragEditStartPositions[idx], model);
+                        Vector3 relWorld = startWorld - worldCentroid;
+                        Vector3 rotatedRel = Vector3.Transform(relWorld, deltaRotWorld);
+                        Vector3 newWorld = worldCentroid + rotatedRel;
+                        em.Vertices[idx] = Vector3.TransformPosition(newWorld, invModel);
+                    }
+
+                    RebuildFromEditMesh(_selectedObject);
+                    RefreshEditVisuals();
+                }
+                else
+                {
+                    Quaternion deltaRot = Quaternion.FromAxisAngle(axisDir, angleDelta);
+                    _selectedObject.Rotation = Quaternion.Normalize(deltaRot * _dragStartObjectRotation);
+                }
             }
         }
     }
