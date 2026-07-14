@@ -18,7 +18,9 @@ namespace nirmana
         private Shader _basicShader;
         private Shader _lineShader;
         private LineRenderer _grid;
-        private LineRenderer _gizmo;
+        private LineRenderer _gizmoTranslate;
+        private LineRenderer _gizmoRotate;
+        private LineRenderer _gizmoScale;
         private LineRenderer _editWireframe;
         private LineRenderer _editVertexPoints;
 
@@ -34,36 +36,49 @@ namespace nirmana
             public Mesh Mesh;
             public EditableMesh EditMesh; // null kalau objek ini belum mendukung edit mode (mis. sphere)
             public Vector3 Position;
-            public Vector3 BoundsMin; // local space, sebelum translasi
+            public Quaternion Rotation = Quaternion.Identity;
+            public Vector3 Scale = Vector3.One;
+            public Vector3 BoundsMin; // local space, sebelum TRS
             public Vector3 BoundsMax;
             public Vector3 Color;
-            public Texture Texture; // null kalau belum ada texture
+            public Texture Texture;
 
-            public Matrix4 GetModelMatrix() => Matrix4.CreateTranslation(Position);
+            public Matrix4 GetModelMatrix() =>
+                Matrix4.CreateScale(Scale) * Matrix4.CreateFromQuaternion(Rotation) * Matrix4.CreateTranslation(Position);
         }
 
         private readonly List<SceneObject> _sceneObjects = new List<SceneObject>();
         private SceneObject _selectedObject;
 
-        // ---------- Edit mode state ----------
+        // ---------- Mode ----------
         private enum EditSelectionMode { Vertex, Face }
+        private enum GizmoMode { Translate, Rotate, Scale }
 
         private bool _isEditMode;
         private EditSelectionMode _editSelectionMode = EditSelectionMode.Vertex;
+        private GizmoMode _gizmoMode = GizmoMode.Translate;
 
-        // ---------- Mouse / drag state ----------
+        // ---------- Mouse / kamera state ----------
         private Point _lastMousePos;
         private bool _isOrbiting;
         private bool _isPanning;
 
+        // ---------- Drag gizmo state ----------
         private bool _isDraggingGizmo;
         private bool _dragIsEditMode;
+        private GizmoMode _dragGizmoMode;
         private int _dragAxis = -1; // 0=X, 1=Y, 2=Z
+
         private Vector2 _dragStartMouse;
-        private Vector2 _dragScreenAxisDir;
-        private float _dragWorldPerPixel;
-        private Vector3 _dragStartObjectPos;               // dipakai di object mode
-        private List<int> _dragEditIndices;                // dipakai di edit mode
+        private Vector2 _dragOriginScreen;       // dipakai mode Rotate (pusat sudut)
+        private Vector2 _dragScreenAxisDir;      // dipakai mode Translate/Scale
+        private float _dragWorldPerPixel;        // dipakai mode Translate/Scale
+
+        private Vector3 _dragStartObjectPos;
+        private Quaternion _dragStartObjectRotation;
+        private Vector3 _dragStartObjectScale;
+
+        private List<int> _dragEditIndices;
         private Dictionary<int, Vector3> _dragEditStartPositions;
 
         public MainForm()
@@ -118,8 +133,6 @@ namespace nirmana
                 TabStop = false
             };
 
-            // Supaya tombol Tab tidak "dimakan" sebagai navigasi fokus dan tetap
-            // sampai ke MainForm_KeyDown untuk toggle Edit Mode.
             _glControl.PreviewKeyDown += (s, e) =>
             {
                 if (e.KeyCode == Keys.Tab) e.IsInputKey = true;
@@ -147,8 +160,11 @@ namespace nirmana
 
             _basicShader = new Shader(ShaderSource.BasicVertex, ShaderSource.BasicFragment);
             _lineShader = new Shader(ShaderSource.LineVertex, ShaderSource.LineFragment);
+
             _grid = LineRenderer.CreateGridWithAxis(10, 1f);
-            _gizmo = LineRenderer.CreateTranslateGizmo(GizmoLength);
+            _gizmoTranslate = LineRenderer.CreateTranslateGizmo(GizmoLength);
+            _gizmoRotate = LineRenderer.CreateRotateGizmo(GizmoLength);
+            _gizmoScale = LineRenderer.CreateScaleGizmo(GizmoLength);
             _editWireframe = new LineRenderer(new float[0]);
             _editVertexPoints = new LineRenderer(new float[0]);
 
@@ -264,6 +280,8 @@ namespace nirmana
 
             bool editModeActive = _isEditMode && _selectedObject?.EditMesh != null;
             bool faceMode = _editSelectionMode == EditSelectionMode.Face;
+            GizmoMode effectiveGizmoMode = editModeActive ? GizmoMode.Translate : _gizmoMode;
+
             bool hasGizmo = editModeActive
                 ? _selectedObject.EditMesh.HasSelection(faceMode)
                 : _selectedObject != null;
@@ -290,11 +308,15 @@ namespace nirmana
                 if (hasGizmo)
                 {
                     Vector3 gizmoWorldPos = editModeActive
-                        ? _selectedObject.Position + _selectedObject.EditMesh.SelectionCentroid(faceMode)
+                        ? Vector3.TransformPosition(_selectedObject.EditMesh.SelectionCentroid(faceMode), _selectedObject.GetModelMatrix())
                         : _selectedObject.Position;
 
+                    LineRenderer activeGizmo =
+                        effectiveGizmoMode == GizmoMode.Translate ? _gizmoTranslate :
+                        effectiveGizmoMode == GizmoMode.Rotate ? _gizmoRotate : _gizmoScale;
+
                     _lineShader.SetMatrix4("uModel", Matrix4.CreateTranslation(gizmoWorldPos));
-                    _gizmo.Draw(PrimitiveType.Lines);
+                    activeGizmo.Draw(PrimitiveType.Lines);
                 }
             }
 
@@ -305,7 +327,7 @@ namespace nirmana
 
         private void ToggleEditMode()
         {
-            if (_selectedObject?.EditMesh == null) return; // objek ini belum mendukung edit mode
+            if (_selectedObject?.EditMesh == null) return;
 
             _isEditMode = !_isEditMode;
             if (!_isEditMode)
@@ -379,6 +401,14 @@ namespace nirmana
                 return;
             }
 
+            // Gizmo mode hanya berlaku di Object Mode (Edit Mode dipaksa Translate).
+            if (!_isEditMode)
+            {
+                if (e.KeyCode == Keys.G) { _gizmoMode = GizmoMode.Translate; return; }
+                if (e.KeyCode == Keys.R) { _gizmoMode = GizmoMode.Rotate; return; }
+                if (e.KeyCode == Keys.S) { _gizmoMode = GizmoMode.Scale; return; }
+            }
+
             if (_isEditMode && _selectedObject?.EditMesh != null)
             {
                 EditableMesh em = _selectedObject.EditMesh;
@@ -425,6 +455,13 @@ namespace nirmana
 
             if (e.Button == MouseButtons.Left)
             {
+                // Ctrl (+ Shift) + klik kiri = kontrol kamera, prioritas di atas seleksi/gizmo.
+                bool ctrl = (ModifierKeys & Keys.Control) == Keys.Control;
+                bool shift = (ModifierKeys & Keys.Shift) == Keys.Shift;
+
+                if (ctrl && shift) { _isPanning = true; return; }
+                if (ctrl) { _isOrbiting = true; return; }
+
                 if (TryStartGizmoDrag(e.Location)) return;
 
                 if (_isEditMode && _selectedObject?.EditMesh != null)
@@ -441,8 +478,17 @@ namespace nirmana
 
         private void GlControl_MouseUp(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left) _isDraggingGizmo = false;
-            if (e.Button == MouseButtons.Middle) { _isOrbiting = false; _isPanning = false; }
+            if (e.Button == MouseButtons.Left)
+            {
+                _isDraggingGizmo = false;
+                _isOrbiting = false;
+                _isPanning = false;
+            }
+            if (e.Button == MouseButtons.Middle)
+            {
+                _isOrbiting = false;
+                _isPanning = false;
+            }
         }
 
         private void GlControl_MouseMove(object sender, MouseEventArgs e)
@@ -489,12 +535,26 @@ namespace nirmana
 
             foreach (SceneObject obj in _sceneObjects)
             {
-                Ray localRay = new Ray(ray.Origin - obj.Position, ray.Direction);
+                Matrix4 invModel = Matrix4.Invert(obj.GetModelMatrix());
+                Vector3 localOrigin = Vector3.TransformPosition(ray.Origin, invModel);
+                Vector3 localDir = Vector3.TransformVector(ray.Direction, invModel);
+                Ray localRay = new Ray(localOrigin, localDir);
+
                 float? hit = ViewportMath.RayIntersectAABB(localRay, obj.BoundsMin, obj.BoundsMax);
-                if (hit.HasValue && hit.Value < closestDist)
+                if (hit.HasValue)
                 {
-                    closestDist = hit.Value;
-                    closest = obj;
+                    // t di local space (bisa beda skala kalau objek di-scale), jadi
+                    // dikonversi balik ke world untuk perbandingan jarak yang adil
+                    // antar objek dengan scale berbeda-beda.
+                    Vector3 localHitPoint = localOrigin + localDir * hit.Value;
+                    Vector3 worldHitPoint = Vector3.TransformPosition(localHitPoint, obj.GetModelMatrix());
+                    float worldDist = (worldHitPoint - ray.Origin).Length;
+
+                    if (worldDist < closestDist)
+                    {
+                        closestDist = worldDist;
+                        closest = obj;
+                    }
                 }
             }
 
@@ -505,7 +565,12 @@ namespace nirmana
         {
             var (view, proj) = GetMatrices();
             Ray worldRay = ViewportMath.ScreenPointToRay(mouseLoc.X, mouseLoc.Y, _glControl.Width, _glControl.Height, view, proj);
-            Ray localRay = new Ray(worldRay.Origin - _selectedObject.Position, worldRay.Direction);
+
+            Matrix4 model = _selectedObject.GetModelMatrix();
+            Matrix4 invModel = Matrix4.Invert(model);
+            Vector3 localOrigin = Vector3.TransformPosition(worldRay.Origin, invModel);
+            Vector3 localDir = Vector3.TransformVector(worldRay.Direction, invModel);
+            Ray localRay = new Ray(localOrigin, localDir);
 
             EditableMesh em = _selectedObject.EditMesh;
             bool shift = (ModifierKeys & Keys.Shift) == Keys.Shift;
@@ -518,7 +583,7 @@ namespace nirmana
 
                 for (int i = 0; i < em.Vertices.Count; i++)
                 {
-                    Vector3 worldPos = _selectedObject.Position + em.Vertices[i];
+                    Vector3 worldPos = Vector3.TransformPosition(em.Vertices[i], model);
                     Vector2 screen = ViewportMath.WorldToScreen(worldPos, view, proj, _glControl.Width, _glControl.Height);
                     float dist = (screen - mousePx).Length;
                     if (dist < bestDist)
@@ -580,12 +645,13 @@ namespace nirmana
         {
             bool editMode = _isEditMode && _selectedObject?.EditMesh != null;
             bool faceMode = _editSelectionMode == EditSelectionMode.Face;
+            GizmoMode effectiveMode = editMode ? GizmoMode.Translate : _gizmoMode;
 
             Vector3 origin;
             if (editMode)
             {
                 if (!_selectedObject.EditMesh.HasSelection(faceMode)) return false;
-                origin = _selectedObject.Position + _selectedObject.EditMesh.SelectionCentroid(faceMode);
+                origin = Vector3.TransformPosition(_selectedObject.EditMesh.SelectionCentroid(faceMode), _selectedObject.GetModelMatrix());
             }
             else
             {
@@ -596,37 +662,62 @@ namespace nirmana
             var (view, proj) = GetMatrices();
             Vector2 mousePx = new Vector2(mouseLoc.X, mouseLoc.Y);
             Vector2 originScreen = ViewportMath.WorldToScreen(origin, view, proj, _glControl.Width, _glControl.Height);
-
             Vector3[] axisDirs = { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ };
+
             int bestAxis = -1;
             float bestDist = GizmoPickThresholdPx;
 
-            for (int axis = 0; axis < 3; axis++)
+            if (effectiveMode == GizmoMode.Rotate)
             {
-                Vector3 tipWorld = origin + axisDirs[axis] * GizmoLength;
-                Vector2 tipScreen = ViewportMath.WorldToScreen(tipWorld, view, proj, _glControl.Width, _glControl.Height);
-                float dist = ViewportMath.DistancePointToSegment2D(mousePx, originScreen, tipScreen);
-                if (dist < bestDist)
+                List<Vector3>[] circles = GizmoGeometry.CreateRotateCirclePoints(GizmoLength);
+                for (int axis = 0; axis < 3; axis++)
                 {
-                    bestDist = dist;
-                    bestAxis = axis;
+                    List<Vector3> pts = circles[axis];
+                    for (int i = 0; i < pts.Count; i++)
+                    {
+                        Vector3 wp0 = origin + pts[i];
+                        Vector3 wp1 = origin + pts[(i + 1) % pts.Count];
+                        Vector2 s0 = ViewportMath.WorldToScreen(wp0, view, proj, _glControl.Width, _glControl.Height);
+                        Vector2 s1 = ViewportMath.WorldToScreen(wp1, view, proj, _glControl.Width, _glControl.Height);
+                        float d = ViewportMath.DistancePointToSegment2D(mousePx, s0, s1);
+                        if (d < bestDist) { bestDist = d; bestAxis = axis; }
+                    }
+                }
+            }
+            else // Translate & Scale sama-sama pakai garis lurus origin->tip untuk hit-test
+            {
+                for (int axis = 0; axis < 3; axis++)
+                {
+                    Vector3 tipWorld = origin + axisDirs[axis] * GizmoLength;
+                    Vector2 tipScreen = ViewportMath.WorldToScreen(tipWorld, view, proj, _glControl.Width, _glControl.Height);
+                    float d = ViewportMath.DistancePointToSegment2D(mousePx, originScreen, tipScreen);
+                    if (d < bestDist) { bestDist = d; bestAxis = axis; }
                 }
             }
 
             if (bestAxis < 0) return false;
 
-            Vector3 tipWorldSel = origin + axisDirs[bestAxis] * GizmoLength;
-            Vector2 tipScreenSel = ViewportMath.WorldToScreen(tipWorldSel, view, proj, _glControl.Width, _glControl.Height);
-            Vector2 screenAxisVec = tipScreenSel - originScreen;
-            float screenAxisLen = screenAxisVec.Length;
-            if (screenAxisLen < 1e-3f) return false;
-
             _isDraggingGizmo = true;
             _dragIsEditMode = editMode;
+            _dragGizmoMode = effectiveMode;
             _dragAxis = bestAxis;
             _dragStartMouse = mousePx;
-            _dragScreenAxisDir = screenAxisVec / screenAxisLen;
-            _dragWorldPerPixel = GizmoLength / screenAxisLen;
+
+            if (effectiveMode == GizmoMode.Rotate)
+            {
+                _dragOriginScreen = originScreen;
+            }
+            else
+            {
+                Vector3 tipWorldSel = origin + axisDirs[bestAxis] * GizmoLength;
+                Vector2 tipScreenSel = ViewportMath.WorldToScreen(tipWorldSel, view, proj, _glControl.Width, _glControl.Height);
+                Vector2 screenAxisVec = tipScreenSel - originScreen;
+                float screenAxisLen = screenAxisVec.Length;
+                if (screenAxisLen < 1e-3f) return false;
+
+                _dragScreenAxisDir = screenAxisVec / screenAxisLen;
+                _dragWorldPerPixel = GizmoLength / screenAxisLen;
+            }
 
             if (editMode)
             {
@@ -639,6 +730,8 @@ namespace nirmana
             else
             {
                 _dragStartObjectPos = origin;
+                _dragStartObjectRotation = _selectedObject.Rotation;
+                _dragStartObjectScale = _selectedObject.Scale;
             }
 
             return true;
@@ -647,26 +740,57 @@ namespace nirmana
         private void UpdateGizmoDrag(Point mouseLoc)
         {
             Vector2 mousePx = new Vector2(mouseLoc.X, mouseLoc.Y);
-            Vector2 mouseDelta = mousePx - _dragStartMouse;
-            float t = Vector2.Dot(mouseDelta, _dragScreenAxisDir) * _dragWorldPerPixel;
-
             Vector3[] axisDirs = { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ };
-            Vector3 delta = axisDirs[_dragAxis] * t;
+            Vector3 axisDir = axisDirs[_dragAxis];
 
-            if (_dragIsEditMode)
+            if (_dragGizmoMode == GizmoMode.Translate)
             {
-                EditableMesh em = _selectedObject.EditMesh;
-                foreach (int idx in _dragEditIndices)
+                Vector2 mouseDelta = mousePx - _dragStartMouse;
+                float t = Vector2.Dot(mouseDelta, _dragScreenAxisDir) * _dragWorldPerPixel;
+                Vector3 delta = axisDir * t;
+
+                if (_dragIsEditMode)
                 {
-                    em.Vertices[idx] = _dragEditStartPositions[idx] + delta;
-                }
+                    EditableMesh em = _selectedObject.EditMesh;
+                    foreach (int idx in _dragEditIndices)
+                        em.Vertices[idx] = _dragEditStartPositions[idx] + delta;
 
-                RebuildFromEditMesh(_selectedObject);
-                RefreshEditVisuals();
+                    RebuildFromEditMesh(_selectedObject);
+                    RefreshEditVisuals();
+                }
+                else
+                {
+                    _selectedObject.Position = _dragStartObjectPos + delta;
+                }
             }
-            else
+            else if (_dragGizmoMode == GizmoMode.Scale)
             {
-                _selectedObject.Position = _dragStartObjectPos + delta;
+                // Hanya dipakai di Object Mode (edit mode dipaksa Translate).
+                Vector2 mouseDelta = mousePx - _dragStartMouse;
+                float alongAxis = Vector2.Dot(mouseDelta, _dragScreenAxisDir) * _dragWorldPerPixel;
+                float scaleDelta = alongAxis / GizmoLength;
+                float factor = Math.Max(0.05f, 1f + scaleDelta);
+
+                Vector3 newScale = _dragStartObjectScale;
+                if (_dragAxis == 0) newScale.X = _dragStartObjectScale.X * factor;
+                else if (_dragAxis == 1) newScale.Y = _dragStartObjectScale.Y * factor;
+                else newScale.Z = _dragStartObjectScale.Z * factor;
+
+                _selectedObject.Scale = newScale;
+            }
+            else // Rotate — sudut dihitung dari perubahan arah mouse relatif ke pusat gizmo di screen space
+            {
+                Vector2 startVec = _dragStartMouse - _dragOriginScreen;
+                Vector2 currentVec = mousePx - _dragOriginScreen;
+
+                if (startVec.LengthSquared < 1f || currentVec.LengthSquared < 1f) return;
+
+                float startAngle = (float)Math.Atan2(startVec.Y, startVec.X);
+                float currentAngle = (float)Math.Atan2(currentVec.Y, currentVec.X);
+                float angleDelta = currentAngle - startAngle;
+
+                Quaternion deltaRot = Quaternion.FromAxisAngle(axisDir, angleDelta);
+                _selectedObject.Rotation = Quaternion.Normalize(deltaRot * _dragStartObjectRotation);
             }
         }
     }

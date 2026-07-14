@@ -130,5 +130,72 @@ namespace nirmana.Rendering
 
             return new LineRenderer(v.ToArray());
         }
+
+        /// <summary>
+        /// Gizmo scale: garis axis + handle kotak kecil di ujung (beda dari
+        /// panah translate supaya gampang dibedakan secara visual).
+        /// </summary>
+        public static LineRenderer CreateScaleGizmo(float length)
+        {
+            List<float> v = new List<float>();
+
+            Vector3 xColor = new Vector3(1f, 0.25f, 0.25f);
+            Vector3 yColor = new Vector3(0.25f, 1f, 0.25f);
+            Vector3 zColor = new Vector3(0.3f, 0.5f, 1f);
+
+            AddLine(v, Vector3.Zero, new Vector3(length, 0, 0), xColor);
+            AddLine(v, Vector3.Zero, new Vector3(0, length, 0), yColor);
+            AddLine(v, Vector3.Zero, new Vector3(0, 0, length), zColor);
+
+            float handle = length * 0.08f;
+            AddBoxHandle(v, new Vector3(length, 0, 0), handle, xColor);
+            AddBoxHandle(v, new Vector3(0, length, 0), handle, yColor);
+            AddBoxHandle(v, new Vector3(0, 0, length), handle, zColor);
+
+            return new LineRenderer(v.ToArray());
+        }
+
+        private static void AddBoxHandle(List<float> v, Vector3 center, float halfSize, Vector3 color)
+        {
+            Vector3[] offsets =
+            {
+                new Vector3(halfSize, 0, 0), new Vector3(-halfSize, 0, 0),
+                new Vector3(0, halfSize, 0), new Vector3(0, -halfSize, 0),
+                new Vector3(0, 0, halfSize), new Vector3(0, 0, -halfSize),
+            };
+            AddLine(v, center + offsets[0], center + offsets[1], color);
+            AddLine(v, center + offsets[2], center + offsets[3], color);
+            AddLine(v, center + offsets[4], center + offsets[5], color);
+        }
+
+        /// <summary>
+        /// Gizmo rotate: 3 lingkaran (satu per axis) memakai titik dari GizmoGeometry.
+        /// </summary>
+        public static LineRenderer CreateRotateGizmo(float radius)
+        {
+            List<float> v = new List<float>();
+
+            Vector3[] colors =
+            {
+                new Vector3(1f, 0.25f, 0.25f),
+                new Vector3(0.25f, 1f, 0.25f),
+                new Vector3(0.3f, 0.5f, 1f),
+            };
+
+            List<Vector3>[] circles = GizmoGeometry.CreateRotateCirclePoints(radius);
+
+            for (int c = 0; c < 3; c++)
+            {
+                List<Vector3> pts = circles[c];
+                for (int i = 0; i < pts.Count; i++)
+                {
+                    Vector3 a = pts[i];
+                    Vector3 b = pts[(i + 1) % pts.Count];
+                    AddLine(v, a, b, colors[c]);
+                }
+            }
+
+            return new LineRenderer(v.ToArray());
+        }
     }
 }
