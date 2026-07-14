@@ -60,6 +60,7 @@
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Rendering\EditableMesh.cs" />
     <Compile Include="Rendering\LineRenderer.cs" />
     <Compile Include="Rendering\Mesh.cs" />
     <Compile Include="Rendering\OrbitCamera.cs" />

@@ -5,25 +5,22 @@ using OpenTK.Graphics.OpenGL4;
 namespace nirmana.Rendering
 {
     /// <summary>
-    /// Renderer sederhana untuk garis (grid lantai + axis X/Y/Z).
-    /// Layout vertex: Position(3) + Color(3) = 6 float per vertex.
+    /// Renderer sederhana untuk garis/titik (grid, axis, gizmo, wireframe edit-mode,
+    /// titik vertex). Layout vertex: Position(3) + Color(3) = 6 float per vertex.
     /// </summary>
     public class LineRenderer
     {
         private readonly int _vao;
         private readonly int _vbo;
-        private readonly int _vertexCount;
+        private int _vertexCount;
 
-        private LineRenderer(float[] vertices)
+        public LineRenderer(float[] vertices)
         {
-            _vertexCount = vertices.Length / 6;
-
             _vao = GL.GenVertexArray();
             GL.BindVertexArray(_vao);
 
             _vbo = GL.GenBuffer();
             GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
-            GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * sizeof(float), vertices, BufferUsageHint.StaticDraw);
 
             int stride = 6 * sizeof(float);
             GL.EnableVertexAttribArray(0);
@@ -33,12 +30,26 @@ namespace nirmana.Rendering
             GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
 
             GL.BindVertexArray(0);
+
+            SetData(vertices);
         }
 
-        public void Draw()
+        /// <summary>
+        /// Timpa isi buffer dengan data baru (dipakai untuk wireframe/vertex-dot
+        /// yang berubah-ubah tiap kali topologi atau seleksi edit-mode berubah).
+        /// </summary>
+        public void SetData(float[] vertices)
         {
+            _vertexCount = vertices.Length / 6;
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, vertices.Length * sizeof(float), vertices, BufferUsageHint.DynamicDraw);
+        }
+
+        public void Draw(PrimitiveType primitiveType = PrimitiveType.Lines)
+        {
+            if (_vertexCount == 0) return;
             GL.BindVertexArray(_vao);
-            GL.DrawArrays(PrimitiveType.Lines, 0, _vertexCount);
+            GL.DrawArrays(primitiveType, 0, _vertexCount);
             GL.BindVertexArray(0);
         }
 
@@ -69,7 +80,7 @@ namespace nirmana.Rendering
             return new LineRenderer(v.ToArray());
         }
 
-        private static void AddLine(List<float> v, Vector3 a, Vector3 b, Vector3 color)
+        public static void AddLine(List<float> v, Vector3 a, Vector3 b, Vector3 color)
         {
             v.Add(a.X); v.Add(a.Y); v.Add(a.Z);
             v.Add(color.X); v.Add(color.Y); v.Add(color.Z);
@@ -77,9 +88,15 @@ namespace nirmana.Rendering
             v.Add(color.X); v.Add(color.Y); v.Add(color.Z);
         }
 
+        public static void AddPoint(List<float> v, Vector3 p, Vector3 color)
+        {
+            v.Add(p.X); v.Add(p.Y); v.Add(p.Z);
+            v.Add(color.X); v.Add(color.Y); v.Add(color.Z);
+        }
+
         /// <summary>
         /// Gizmo translate dalam local space (origin di 0,0,0). Diposisikan
-        /// ke objek terpilih lewat uModel saat digambar, jadi tidak perlu
+        /// ke objek/seleksi terpilih lewat uModel saat digambar, jadi tidak perlu
         /// dibangun ulang tiap frame.
         /// </summary>
         public static LineRenderer CreateTranslateGizmo(float length)

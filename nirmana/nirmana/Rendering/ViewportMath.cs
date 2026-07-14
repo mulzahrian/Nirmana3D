@@ -130,5 +130,32 @@ namespace nirmana.Rendering
             Vector2 closest = segA + ab * t;
             return (point - closest).Length;
         }
+
+        /// <summary>
+        /// Ray-triangle intersection (Moller-Trumbore). Dipakai untuk face
+        /// picking di edit mode. Return jarak hit atau null kalau tidak kena.
+        /// </summary>
+        public static float? RayIntersectTriangle(Ray ray, Vector3 v0, Vector3 v1, Vector3 v2)
+        {
+            const float epsilon = 1e-6f;
+
+            Vector3 edge1 = v1 - v0;
+            Vector3 edge2 = v2 - v0;
+            Vector3 h = Vector3.Cross(ray.Direction, edge2);
+            float a = Vector3.Dot(edge1, h);
+            if (Math.Abs(a) < epsilon) return null; // ray sejajar segitiga
+
+            float f = 1f / a;
+            Vector3 s = ray.Origin - v0;
+            float u = f * Vector3.Dot(s, h);
+            if (u < 0f || u > 1f) return null;
+
+            Vector3 q = Vector3.Cross(s, edge1);
+            float v = f * Vector3.Dot(ray.Direction, q);
+            if (v < 0f || u + v > 1f) return null;
+
+            float t = f * Vector3.Dot(edge2, q);
+            return t > epsilon ? t : (float?)null;
+        }
     }
 }
