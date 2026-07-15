@@ -33,8 +33,10 @@ namespace nirmana
         private class SceneObject
         {
             public string Name;
-            public Mesh Mesh;
-            public EditableMesh EditMesh; // null kalau objek ini belum mendukung edit mode (mis. sphere)
+            public Mesh Mesh; // null kalau objek ini armature (tidak punya mesh solid)
+            public EditableMesh EditMesh; // null kalau objek ini belum mendukung edit mode (mis. sphere/armature)
+            public Skeleton Skeleton; // non-null kalau objek ini armature
+            public LineRenderer SkeletonRenderer;
             public Vector3 Position;
             public Quaternion Rotation = Quaternion.Identity;
             public Vector3 Scale = Vector3.One;
@@ -64,8 +66,10 @@ namespace nirmana
         private bool _isPanning;
 
         // ---------- Drag gizmo state ----------
+        private enum DragTarget { Object, MeshEdit, BoneEdit }
+
         private bool _isDraggingGizmo;
-        private bool _dragIsEditMode;
+        private DragTarget _dragTarget;
         private GizmoMode _dragGizmoMode;
         private int _dragAxis = -1; // 0=X, 1=Y, 2=Z
 
@@ -81,6 +85,10 @@ namespace nirmana
         private List<int> _dragEditIndices;
         private Dictionary<int, Vector3> _dragEditStartPositions;
         private Vector3 _dragEditCentroidLocal;
+
+        private int _dragBoneIndex = -1;
+        private Vector3 _dragBoneHeadLocal;       // pivot rotate/scale (head bone tidak ikut berubah)
+        private Vector3 _dragBoneStartTailLocal;
 
         public MainForm()
         {
@@ -111,6 +119,7 @@ namespace nirmana
             addMenu.DropDownItems.Add("Cube", null, (s, e) => AddCube());
             addMenu.DropDownItems.Add("Sphere", null, (s, e) =>
                 AddObject(Primitives.CreateSphere(1f), null, "Sphere", Vector3.Zero, new Vector3(-1f), new Vector3(1f)));
+            addMenu.DropDownItems.Add("Armature", null, (s, e) => AddArmature());
 
             ToolStripMenuItem materialMenu = new ToolStripMenuItem("Material");
             materialMenu.DropDownItems.Add("Load Texture...", null, (s, e) => LoadTextureForSelected());
@@ -197,6 +206,52 @@ namespace nirmana
             _isEditMode = false;
         }
 
+        private void AddArmature()
+        {
+            SceneObject obj = new SceneObject
+            {
+                Name = "Armature",
+                Mesh = null,
+                EditMesh = null,
+                Skeleton = Skeleton.CreateDefault(),
+                SkeletonRenderer = new LineRenderer(new float[0]),
+                Position = Vector3.Zero,
+                Color = new Vector3(0.65f, 0.65f, 0.7f)
+            };
+
+            RebuildSkeletonAfterEdit(obj);
+            _sceneObjects.Add(obj);
+            _selectedObject = obj;
+            _isEditMode = false;
+        }
+
+        private void RebuildSkeletonAfterEdit(SceneObject obj)
+        {
+            var (min, max) = obj.Skeleton.ComputeBounds();
+            obj.BoundsMin = min;
+            obj.BoundsMax = max;
+            RefreshSkeletonVisuals(obj);
+        }
+
+        private void RefreshSkeletonVisuals(SceneObject obj)
+        {
+            if (obj?.Skeleton == null || obj.SkeletonRenderer == null) return;
+
+            List<float> data = new List<float>();
+            Vector3 selColor = new Vector3(1f, 0.55f, 0.1f);
+            Vector3 rootColor = new Vector3(0.3f, 0.9f, 0.9f);
+            Vector3 normalColor = new Vector3(0.9f, 0.9f, 0.95f);
+
+            for (int i = 0; i < obj.Skeleton.Bones.Count; i++)
+            {
+                Bone b = obj.Skeleton.Bones[i];
+                Vector3 color = i == obj.Skeleton.SelectedBone ? selColor : (b.ParentIndex < 0 ? rootColor : normalColor);
+                BoneGeometry.AddBoneOctahedron(data, b.Head, b.Tail, color);
+            }
+
+            obj.SkeletonRenderer.SetData(data.ToArray());
+        }
+
         private void LoadTextureForSelected()
         {
             if (_selectedObject == null)
@@ -258,6 +313,8 @@ namespace nirmana
 
             foreach (SceneObject obj in _sceneObjects)
             {
+                if (obj.Mesh == null) continue; // armature tidak punya mesh solid
+
                 bool tintSelected = obj == _selectedObject && !_isEditMode;
                 Vector3 renderColor = tintSelected
                     ? Vector3.Lerp(obj.Color, new Vector3(1f, 0.55f, 0.15f), 0.5f)
@@ -279,22 +336,26 @@ namespace nirmana
                 obj.Mesh.Draw();
             }
 
-            bool editModeActive = _isEditMode && _selectedObject?.EditMesh != null;
+            bool meshEditActive = _isEditMode && _selectedObject?.EditMesh != null;
+            bool boneEditActive = _isEditMode && _selectedObject?.Skeleton != null;
             bool faceMode = _editSelectionMode == EditSelectionMode.Face;
             GizmoMode effectiveGizmoMode = _gizmoMode;
 
-            bool hasGizmo = editModeActive
-                ? _selectedObject.EditMesh.HasSelection(faceMode)
-                : _selectedObject != null;
+            bool hasGizmo;
+            if (meshEditActive) hasGizmo = _selectedObject.EditMesh.HasSelection(faceMode);
+            else if (boneEditActive) hasGizmo = _selectedObject.Skeleton.SelectedBone >= 0;
+            else hasGizmo = _selectedObject != null;
 
-            if (editModeActive || hasGizmo)
+            bool anySkeletons = _sceneObjects.Any(o => o.Skeleton != null);
+
+            if (meshEditActive || hasGizmo || anySkeletons)
             {
-                GL.Clear(ClearBufferMask.DepthBufferBit); // overlay selalu di depan (mirip x-ray edit mode)
+                GL.Clear(ClearBufferMask.DepthBufferBit); // overlay & bone selalu di depan (x-ray)
                 _lineShader.Use();
                 _lineShader.SetMatrix4("uView", view);
                 _lineShader.SetMatrix4("uProjection", projection);
 
-                if (editModeActive)
+                if (meshEditActive)
                 {
                     _lineShader.SetMatrix4("uModel", _selectedObject.GetModelMatrix());
                     _editWireframe.Draw(PrimitiveType.Lines);
@@ -306,11 +367,22 @@ namespace nirmana
                     }
                 }
 
+                foreach (SceneObject obj in _sceneObjects)
+                {
+                    if (obj.Skeleton == null || obj.SkeletonRenderer == null) continue;
+                    _lineShader.SetMatrix4("uModel", obj.GetModelMatrix());
+                    obj.SkeletonRenderer.Draw(PrimitiveType.Lines);
+                }
+
                 if (hasGizmo)
                 {
-                    Vector3 gizmoWorldPos = editModeActive
-                        ? Vector3.TransformPosition(_selectedObject.EditMesh.SelectionCentroid(faceMode), _selectedObject.GetModelMatrix())
-                        : _selectedObject.Position;
+                    Vector3 gizmoWorldPos;
+                    if (meshEditActive)
+                        gizmoWorldPos = Vector3.TransformPosition(_selectedObject.EditMesh.SelectionCentroid(faceMode), _selectedObject.GetModelMatrix());
+                    else if (boneEditActive)
+                        gizmoWorldPos = Vector3.TransformPosition(_selectedObject.Skeleton.Bones[_selectedObject.Skeleton.SelectedBone].Tail, _selectedObject.GetModelMatrix());
+                    else
+                        gizmoWorldPos = _selectedObject.Position;
 
                     LineRenderer activeGizmo =
                         effectiveGizmoMode == GizmoMode.Translate ? _gizmoTranslate :
@@ -328,13 +400,22 @@ namespace nirmana
 
         private void ToggleEditMode()
         {
-            if (_selectedObject?.EditMesh == null) return;
+            bool supportsEdit = _selectedObject?.EditMesh != null || _selectedObject?.Skeleton != null;
+            if (!supportsEdit) return;
 
             _isEditMode = !_isEditMode;
             if (!_isEditMode)
             {
-                _selectedObject.EditMesh.SelectedVertices.Clear();
-                _selectedObject.EditMesh.SelectedFace = -1;
+                if (_selectedObject.EditMesh != null)
+                {
+                    _selectedObject.EditMesh.SelectedVertices.Clear();
+                    _selectedObject.EditMesh.SelectedFace = -1;
+                }
+                if (_selectedObject.Skeleton != null)
+                {
+                    _selectedObject.Skeleton.SelectedBone = -1;
+                    RefreshSkeletonVisuals(_selectedObject);
+                }
             }
             RefreshEditVisuals();
         }
@@ -445,11 +526,33 @@ namespace nirmana
                 return;
             }
 
+            if (_isEditMode && _selectedObject?.Skeleton != null)
+            {
+                Skeleton skel = _selectedObject.Skeleton;
+
+                if (e.KeyCode == Keys.E && skel.SelectedBone >= 0)
+                {
+                    int newIdx = skel.AddBoneFromTail(skel.SelectedBone);
+                    if (newIdx >= 0) skel.SelectedBone = newIdx;
+                    RebuildSkeletonAfterEdit(_selectedObject);
+                    return;
+                }
+
+                if (e.KeyCode == Keys.Delete && skel.SelectedBone >= 0)
+                {
+                    skel.DeleteBone(skel.SelectedBone);
+                    RebuildSkeletonAfterEdit(_selectedObject);
+                    return;
+                }
+
+                return;
+            }
+
             // Object mode
             if (e.KeyCode == Keys.Delete && _selectedObject != null)
             {
                 _sceneObjects.Remove(_selectedObject);
-                _selectedObject.Mesh.Dispose();
+                _selectedObject.Mesh?.Dispose();
                 _selectedObject.Texture?.Dispose();
                 _selectedObject = null;
             }
@@ -474,6 +577,8 @@ namespace nirmana
 
                 if (_isEditMode && _selectedObject?.EditMesh != null)
                     TryEditModeSelect(e.Location);
+                else if (_isEditMode && _selectedObject?.Skeleton != null)
+                    TryBoneEditSelect(e.Location);
                 else
                     TrySelectObject(e.Location);
             }
@@ -649,17 +754,53 @@ namespace nirmana
             RefreshEditVisuals();
         }
 
+        private void TryBoneEditSelect(Point mouseLoc)
+        {
+            var (view, proj) = GetMatrices();
+            Matrix4 model = _selectedObject.GetModelMatrix();
+            Skeleton skel = _selectedObject.Skeleton;
+            Vector2 mousePx = new Vector2(mouseLoc.X, mouseLoc.Y);
+
+            int best = -1;
+            float bestDist = GizmoPickThresholdPx + 4f; // sedikit lebih longgar dari gizmo, bone kadang tipis di layar
+
+            for (int i = 0; i < skel.Bones.Count; i++)
+            {
+                Vector3 headWorld = Vector3.TransformPosition(skel.Bones[i].Head, model);
+                Vector3 tailWorld = Vector3.TransformPosition(skel.Bones[i].Tail, model);
+                Vector2 headScreen = ViewportMath.WorldToScreen(headWorld, view, proj, _glControl.Width, _glControl.Height);
+                Vector2 tailScreen = ViewportMath.WorldToScreen(tailWorld, view, proj, _glControl.Width, _glControl.Height);
+
+                float dist = ViewportMath.DistancePointToSegment2D(mousePx, headScreen, tailScreen);
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    best = i;
+                }
+            }
+
+            skel.SelectedBone = best;
+            RefreshSkeletonVisuals(_selectedObject);
+        }
+
         private bool TryStartGizmoDrag(Point mouseLoc)
         {
-            bool editMode = _isEditMode && _selectedObject?.EditMesh != null;
+            bool meshEdit = _isEditMode && _selectedObject?.EditMesh != null;
+            bool boneEdit = _isEditMode && _selectedObject?.Skeleton != null;
             bool faceMode = _editSelectionMode == EditSelectionMode.Face;
             GizmoMode effectiveMode = _gizmoMode;
 
             Vector3 origin;
-            if (editMode)
+            if (meshEdit)
             {
                 if (!_selectedObject.EditMesh.HasSelection(faceMode)) return false;
                 origin = Vector3.TransformPosition(_selectedObject.EditMesh.SelectionCentroid(faceMode), _selectedObject.GetModelMatrix());
+            }
+            else if (boneEdit)
+            {
+                if (_selectedObject.Skeleton.SelectedBone < 0) return false;
+                Bone bone = _selectedObject.Skeleton.Bones[_selectedObject.Skeleton.SelectedBone];
+                origin = Vector3.TransformPosition(bone.Tail, _selectedObject.GetModelMatrix());
             }
             else
             {
@@ -706,7 +847,7 @@ namespace nirmana
             if (bestAxis < 0) return false;
 
             _isDraggingGizmo = true;
-            _dragIsEditMode = editMode;
+            _dragTarget = meshEdit ? DragTarget.MeshEdit : boneEdit ? DragTarget.BoneEdit : DragTarget.Object;
             _dragGizmoMode = effectiveMode;
             _dragAxis = bestAxis;
             _dragStartMouse = mousePx;
@@ -727,7 +868,7 @@ namespace nirmana
                 _dragWorldPerPixel = GizmoLength / screenAxisLen;
             }
 
-            if (editMode)
+            if (meshEdit)
             {
                 _dragEditIndices = faceMode
                     ? new List<int>(_selectedObject.EditMesh.Faces[_selectedObject.EditMesh.SelectedFace].Indices)
@@ -735,6 +876,13 @@ namespace nirmana
 
                 _dragEditStartPositions = _dragEditIndices.ToDictionary(i => i, i => _selectedObject.EditMesh.Vertices[i]);
                 _dragEditCentroidLocal = _selectedObject.EditMesh.SelectionCentroid(faceMode);
+            }
+            else if (boneEdit)
+            {
+                _dragBoneIndex = _selectedObject.Skeleton.SelectedBone;
+                Bone bone = _selectedObject.Skeleton.Bones[_dragBoneIndex];
+                _dragBoneHeadLocal = bone.Head;
+                _dragBoneStartTailLocal = bone.Tail;
             }
             else
             {
@@ -758,7 +906,7 @@ namespace nirmana
                 float t = Vector2.Dot(mouseDelta, _dragScreenAxisDir) * _dragWorldPerPixel;
                 Vector3 delta = axisDir * t;
 
-                if (_dragIsEditMode)
+                if (_dragTarget == DragTarget.MeshEdit)
                 {
                     // Delta dihitung di world space (mengikuti arah axis dunia),
                     // tapi EditMesh.Vertices disimpan di local space objek. Kalau
@@ -775,6 +923,15 @@ namespace nirmana
                     RebuildFromEditMesh(_selectedObject);
                     RefreshEditVisuals();
                 }
+                else if (_dragTarget == DragTarget.BoneEdit)
+                {
+                    Matrix4 invModel = Matrix4.Invert(_selectedObject.GetModelMatrix());
+                    Vector3 localDelta = Vector3.TransformVector(delta, invModel);
+                    Vector3 newTail = _dragBoneStartTailLocal + localDelta;
+
+                    _selectedObject.Skeleton.SetBoneTail(_dragBoneIndex, newTail);
+                    RebuildSkeletonAfterEdit(_selectedObject);
+                }
                 else
                 {
                     _selectedObject.Position = _dragStartObjectPos + delta;
@@ -787,7 +944,7 @@ namespace nirmana
                 float scaleDelta = alongAxis / GizmoLength;
                 float factor = Math.Max(0.05f, 1f + scaleDelta);
 
-                if (_dragIsEditMode)
+                if (_dragTarget == DragTarget.MeshEdit)
                 {
                     // Kerjakan di world space (transform local -> world, scale
                     // di sekitar centroid, transform balik ke local) supaya tetap
@@ -808,6 +965,22 @@ namespace nirmana
 
                     RebuildFromEditMesh(_selectedObject);
                     RefreshEditVisuals();
+                }
+                else if (_dragTarget == DragTarget.BoneEdit)
+                {
+                    // Scale = ubah panjang bone, dengan HEAD sebagai titik pivot tetap.
+                    Matrix4 model = _selectedObject.GetModelMatrix();
+                    Matrix4 invModel = Matrix4.Invert(model);
+                    Vector3 worldHead = Vector3.TransformPosition(_dragBoneHeadLocal, model);
+                    Vector3 startWorldTail = Vector3.TransformPosition(_dragBoneStartTailLocal, model);
+
+                    Vector3 relWorld = startWorldTail - worldHead;
+                    Vector3 scaledRel = relWorld + axisDir * (Vector3.Dot(relWorld, axisDir) * (factor - 1f));
+                    Vector3 newWorldTail = worldHead + scaledRel;
+                    Vector3 newTailLocal = Vector3.TransformPosition(newWorldTail, invModel);
+
+                    _selectedObject.Skeleton.SetBoneTail(_dragBoneIndex, newTailLocal);
+                    RebuildSkeletonAfterEdit(_selectedObject);
                 }
                 else
                 {
@@ -830,7 +1003,7 @@ namespace nirmana
                 float currentAngle = (float)Math.Atan2(currentVec.Y, currentVec.X);
                 float angleDelta = currentAngle - startAngle;
 
-                if (_dragIsEditMode)
+                if (_dragTarget == DragTarget.MeshEdit)
                 {
                     Matrix4 model = _selectedObject.GetModelMatrix();
                     Matrix4 invModel = Matrix4.Invert(model);
@@ -849,6 +1022,22 @@ namespace nirmana
 
                     RebuildFromEditMesh(_selectedObject);
                     RefreshEditVisuals();
+                }
+                else if (_dragTarget == DragTarget.BoneEdit)
+                {
+                    Matrix4 model = _selectedObject.GetModelMatrix();
+                    Matrix4 invModel = Matrix4.Invert(model);
+                    Vector3 worldHead = Vector3.TransformPosition(_dragBoneHeadLocal, model);
+                    Vector3 startWorldTail = Vector3.TransformPosition(_dragBoneStartTailLocal, model);
+
+                    Quaternion deltaRotWorld = Quaternion.FromAxisAngle(axisDir, angleDelta);
+                    Vector3 relWorld = startWorldTail - worldHead;
+                    Vector3 rotatedRel = Vector3.Transform(relWorld, deltaRotWorld);
+                    Vector3 newWorldTail = worldHead + rotatedRel;
+                    Vector3 newTailLocal = Vector3.TransformPosition(newWorldTail, invModel);
+
+                    _selectedObject.Skeleton.SetBoneTail(_dragBoneIndex, newTailLocal);
+                    RebuildSkeletonAfterEdit(_selectedObject);
                 }
                 else
                 {
