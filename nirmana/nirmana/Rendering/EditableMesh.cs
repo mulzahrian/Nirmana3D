@@ -109,21 +109,33 @@ namespace nirmana.Rendering
         /// vertex diduplikasi per sudut face, quad ditriangulasi fan).
         /// Panggil setelah topologi atau posisi vertex berubah.
         /// </summary>
-        public Mesh BuildRenderMesh()
+        /// <param name="positionsOverride">
+        /// Kalau diisi (misal hasil skinning/deform), posisi & normal dihitung
+        /// dari sini, bukan dari Vertices. UV tetap dihitung dari Vertices
+        /// (posisi rest asli) supaya texture tidak "mengambang" waktu mesh
+        /// dideform. Panjang array harus sama dengan Vertices.Count.
+        /// </param>
+        public Mesh BuildRenderMesh(IList<Vector3> positionsOverride = null)
         {
+            IList<Vector3> positions = positionsOverride ?? Vertices;
+
             List<float> verts = new List<float>();
             List<uint> indices = new List<uint>();
             uint cursor = 0;
 
             foreach (Face face in Faces)
             {
-                Vector3 normal = FaceNormal(face);
+                Vector3 a = positions[face.Indices[0]];
+                Vector3 b = positions[face.Indices[1]];
+                Vector3 c = positions[face.Indices[2]];
+                Vector3 normal = Vector3.Normalize(Vector3.Cross(b - a, c - a));
+
                 int n = face.Indices.Count;
 
                 for (int k = 0; k < n; k++)
                 {
-                    Vector3 p = Vertices[face.Indices[k]];
-                    Vector2 uv = ComputeBoxUV(p, normal);
+                    Vector3 p = positions[face.Indices[k]];
+                    Vector2 uv = ComputeBoxUV(Vertices[face.Indices[k]], normal);
 
                     verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
                     verts.Add(normal.X); verts.Add(normal.Y); verts.Add(normal.Z);

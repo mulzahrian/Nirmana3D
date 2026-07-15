@@ -44,6 +44,7 @@ namespace nirmana
             public Vector3 BoundsMax;
             public Vector3 Color;
             public Texture Texture;
+            public SkinBinding SkinBinding; // non-null kalau mesh ini sudah di-bind ke armature
 
             public Matrix4 GetModelMatrix() =>
                 Matrix4.CreateScale(Scale) * Matrix4.CreateFromQuaternion(Rotation) * Matrix4.CreateTranslation(Position);
@@ -57,6 +58,7 @@ namespace nirmana
         private enum GizmoMode { Translate, Rotate, Scale }
 
         private bool _isEditMode;
+        private bool _isPoseMode;
         private EditSelectionMode _editSelectionMode = EditSelectionMode.Vertex;
         private GizmoMode _gizmoMode = GizmoMode.Translate;
 
@@ -66,7 +68,7 @@ namespace nirmana
         private bool _isPanning;
 
         // ---------- Drag gizmo state ----------
-        private enum DragTarget { Object, MeshEdit, BoneEdit }
+        private enum DragTarget { Object, MeshEdit, BoneEdit, PoseEdit }
 
         private bool _isDraggingGizmo;
         private DragTarget _dragTarget;
@@ -89,6 +91,7 @@ namespace nirmana
         private int _dragBoneIndex = -1;
         private Vector3 _dragBoneHeadLocal;       // pivot rotate/scale (head bone tidak ikut berubah)
         private Vector3 _dragBoneStartTailLocal;
+        private Quaternion _dragBoneStartPoseRotation;
 
         public MainForm()
         {
@@ -125,9 +128,14 @@ namespace nirmana
             materialMenu.DropDownItems.Add("Load Texture...", null, (s, e) => LoadTextureForSelected());
             materialMenu.DropDownItems.Add("Remove Texture", null, (s, e) => RemoveTextureFromSelected());
 
+            ToolStripMenuItem riggingMenu = new ToolStripMenuItem("Rigging");
+            riggingMenu.DropDownItems.Add("Bind Selected Mesh to Armature", null, (s, e) => BindSelectedMeshToArmature());
+            riggingMenu.DropDownItems.Add("Reset Pose", null, (s, e) => ResetPoseForSelected());
+
             menu.Items.Add(fileMenu);
             menu.Items.Add(addMenu);
             menu.Items.Add(materialMenu);
+            menu.Items.Add(riggingMenu);
 
             MainMenuStrip = menu;
             Controls.Add(menu);
@@ -237,6 +245,13 @@ namespace nirmana
         {
             if (obj?.Skeleton == null || obj.SkeletonRenderer == null) return;
 
+            // Waktu sedang edit rest-pose (Armature Edit Mode) objek ini, tampilkan
+            // apa adanya (bind), supaya sinkron dengan apa yang sedang di-drag.
+            // Di luar itu (Object Mode / Pose Mode / armature lain), tampilkan
+            // posisi POSE saat ini (otomatis sama dengan bind kalau belum diposekan).
+            bool showBindPose = _isEditMode && _selectedObject == obj;
+            (Vector3 head, Vector3 tail)[] posed = showBindPose ? null : obj.Skeleton.ComputePosedSegments();
+
             List<float> data = new List<float>();
             Vector3 selColor = new Vector3(1f, 0.55f, 0.1f);
             Vector3 rootColor = new Vector3(0.3f, 0.9f, 0.9f);
@@ -245,11 +260,148 @@ namespace nirmana
             for (int i = 0; i < obj.Skeleton.Bones.Count; i++)
             {
                 Bone b = obj.Skeleton.Bones[i];
+                Vector3 head = showBindPose ? b.Head : posed[i].head;
+                Vector3 tail = showBindPose ? b.Tail : posed[i].tail;
                 Vector3 color = i == obj.Skeleton.SelectedBone ? selColor : (b.ParentIndex < 0 ? rootColor : normalColor);
-                BoneGeometry.AddBoneOctahedron(data, b.Head, b.Tail, color);
+                BoneGeometry.AddBoneOctahedron(data, head, tail, color);
             }
 
             obj.SkeletonRenderer.SetData(data.ToArray());
+        }
+
+        // ---------- Rigging / Skinning ----------
+
+        private void BindSelectedMeshToArmature()
+        {
+            if (_selectedObject?.EditMesh == null)
+            {
+                MessageBox.Show("Pilih objek mesh (yang punya Edit Mode) dulu, misalnya Cube.", "Info");
+                return;
+            }
+
+            SceneObject armatureObj = _sceneObjects.FirstOrDefault(o => o.Skeleton != null);
+            if (armatureObj == null)
+            {
+                MessageBox.Show("Belum ada Armature di scene. Tambah dulu lewat Add > Armature.", "Info");
+                return;
+            }
+
+            SceneObject meshObj = _selectedObject;
+            EditableMesh em = meshObj.EditMesh;
+            Skeleton skel = armatureObj.Skeleton;
+
+            Matrix4 meshModel = meshObj.GetModelMatrix();
+            Matrix4 armModel = armatureObj.GetModelMatrix();
+
+            int vertCount = em.Vertices.Count;
+            int[][] boneIdx = new int[vertCount][];
+            float[][] boneWeight = new float[vertCount][];
+
+            for (int vi = 0; vi < vertCount; vi++)
+            {
+                Vector3 worldPos = Vector3.TransformPosition(em.Vertices[vi], meshModel);
+
+                var distances = new List<(int bone, float dist)>();
+                for (int bi = 0; bi < skel.Bones.Count; bi++)
+                {
+                    Vector3 headW = Vector3.TransformPosition(skel.Bones[bi].Head, armModel);
+                    Vector3 tailW = Vector3.TransformPosition(skel.Bones[bi].Tail, armModel);
+                    distances.Add((bi, ViewportMath.DistancePointToSegment3D(worldPos, headW, tailW)));
+                }
+
+                distances.Sort((a, b) => a.dist.CompareTo(b.dist));
+                int take = Math.Min(4, distances.Count);
+
+                int[] idx = { -1, -1, -1, -1 };
+                float[] w = new float[4];
+                float sum = 0f;
+
+                for (int k = 0; k < take; k++)
+                {
+                    float invDist = 1f / (distances[k].dist + 0.05f); // epsilon: hindari divide-by-zero & bobot ekstrem
+                    idx[k] = distances[k].bone;
+                    w[k] = invDist;
+                    sum += invDist;
+                }
+                for (int k = 0; k < take; k++) w[k] /= sum;
+
+                boneIdx[vi] = idx;
+                boneWeight[vi] = w;
+            }
+
+            meshObj.SkinBinding = new SkinBinding
+            {
+                ArmatureObject = armatureObj,
+                BindLocalPositions = em.Vertices.ToArray(),
+                BoneIndices = boneIdx,
+                BoneWeights = boneWeight
+            };
+
+            RefreshSkinnedMesh(meshObj);
+            MessageBox.Show($"'{meshObj.Name}' berhasil di-bind ke '{armatureObj.Name}'. Coba masuk Pose Mode (Ctrl+Tab di armature) lalu putar salah satu bone.", "Bind selesai");
+        }
+
+        private void ResetPoseForSelected()
+        {
+            if (_selectedObject?.Skeleton == null) return;
+
+            foreach (Bone b in _selectedObject.Skeleton.Bones)
+                b.PoseRotation = Quaternion.Identity;
+
+            RefreshSkeletonVisuals(_selectedObject);
+            RefreshSkinnedMeshesFor(_selectedObject);
+        }
+
+        /// <summary>Deform ulang semua mesh yang di-bind ke armature tertentu, sesuai pose saat ini.</summary>
+        private void RefreshSkinnedMeshesFor(SceneObject armatureObj)
+        {
+            foreach (SceneObject obj in _sceneObjects)
+            {
+                if (obj.SkinBinding?.ArmatureObject == armatureObj)
+                {
+                    RefreshSkinnedMesh(obj);
+                }
+            }
+        }
+
+        private void RefreshSkinnedMesh(SceneObject meshObj)
+        {
+            SkinBinding bind = meshObj.SkinBinding;
+            if (bind == null) return;
+
+            SceneObject armObj = (SceneObject)bind.ArmatureObject;
+            Skeleton skel = armObj.Skeleton;
+
+            Matrix4 meshModel = meshObj.GetModelMatrix();
+            Matrix4 invMeshModel = Matrix4.Invert(meshModel);
+            Matrix4 armModel = armObj.GetModelMatrix();
+            Matrix4 invArmModel = Matrix4.Invert(armModel);
+
+            Matrix4[] skinMatrices = skel.ComputeSkinMatrices();
+            Vector3[] deformed = new Vector3[bind.BindLocalPositions.Length];
+
+            for (int vi = 0; vi < deformed.Length; vi++)
+            {
+                Vector3 worldBind = Vector3.TransformPosition(bind.BindLocalPositions[vi], meshModel);
+                Vector3 armLocalBind = Vector3.TransformPosition(worldBind, invArmModel);
+
+                Vector3 blended = Vector3.Zero;
+                int[] idx = bind.BoneIndices[vi];
+                float[] w = bind.BoneWeights[vi];
+
+                for (int k = 0; k < 4; k++)
+                {
+                    if (idx[k] < 0) continue;
+                    Vector3 skinnedLocal = Vector3.TransformPosition(armLocalBind, skinMatrices[idx[k]]);
+                    blended += skinnedLocal * w[k];
+                }
+
+                Vector3 worldSkinned = Vector3.TransformPosition(blended, armModel);
+                deformed[vi] = Vector3.TransformPosition(worldSkinned, invMeshModel);
+            }
+
+            meshObj.Mesh.Dispose();
+            meshObj.Mesh = meshObj.EditMesh.BuildRenderMesh(deformed);
         }
 
         private void LoadTextureForSelected()
@@ -338,12 +490,14 @@ namespace nirmana
 
             bool meshEditActive = _isEditMode && _selectedObject?.EditMesh != null;
             bool boneEditActive = _isEditMode && _selectedObject?.Skeleton != null;
+            bool poseModeActive = _isPoseMode && _selectedObject?.Skeleton != null;
             bool faceMode = _editSelectionMode == EditSelectionMode.Face;
             GizmoMode effectiveGizmoMode = _gizmoMode;
 
             bool hasGizmo;
             if (meshEditActive) hasGizmo = _selectedObject.EditMesh.HasSelection(faceMode);
             else if (boneEditActive) hasGizmo = _selectedObject.Skeleton.SelectedBone >= 0;
+            else if (poseModeActive) hasGizmo = _selectedObject.Skeleton.SelectedBone >= 0 && effectiveGizmoMode == GizmoMode.Rotate;
             else hasGizmo = _selectedObject != null;
 
             bool anySkeletons = _sceneObjects.Any(o => o.Skeleton != null);
@@ -381,6 +535,11 @@ namespace nirmana
                         gizmoWorldPos = Vector3.TransformPosition(_selectedObject.EditMesh.SelectionCentroid(faceMode), _selectedObject.GetModelMatrix());
                     else if (boneEditActive)
                         gizmoWorldPos = Vector3.TransformPosition(_selectedObject.Skeleton.Bones[_selectedObject.Skeleton.SelectedBone].Tail, _selectedObject.GetModelMatrix());
+                    else if (poseModeActive)
+                    {
+                        var segs = _selectedObject.Skeleton.ComputePosedSegments();
+                        gizmoWorldPos = Vector3.TransformPosition(segs[_selectedObject.Skeleton.SelectedBone].tail, _selectedObject.GetModelMatrix());
+                    }
                     else
                         gizmoWorldPos = _selectedObject.Position;
 
@@ -403,6 +562,7 @@ namespace nirmana
             bool supportsEdit = _selectedObject?.EditMesh != null || _selectedObject?.Skeleton != null;
             if (!supportsEdit) return;
 
+            _isPoseMode = false;
             _isEditMode = !_isEditMode;
             if (!_isEditMode)
             {
@@ -418,6 +578,25 @@ namespace nirmana
                 }
             }
             RefreshEditVisuals();
+        }
+
+        private void TogglePoseMode()
+        {
+            if (_selectedObject?.Skeleton == null) return;
+
+            _isEditMode = false;
+            _isPoseMode = !_isPoseMode;
+
+            if (_isPoseMode)
+            {
+                _gizmoMode = GizmoMode.Rotate; // Pose Mode cuma dukung rotate
+            }
+            else
+            {
+                _selectedObject.Skeleton.SelectedBone = -1;
+            }
+
+            RefreshSkeletonVisuals(_selectedObject);
         }
 
         private void SetEditSelectionMode(EditSelectionMode mode)
@@ -477,16 +656,23 @@ namespace nirmana
 
         private void MainForm_KeyDown(object sender, KeyEventArgs e)
         {
+            if (e.KeyCode == Keys.Tab && e.Control)
+            {
+                TogglePoseMode();
+                return;
+            }
+
             if (e.KeyCode == Keys.Tab)
             {
                 ToggleEditMode();
                 return;
             }
 
-            // Gizmo mode sekarang berlaku di Object Mode maupun Edit Mode.
-            if (e.KeyCode == Keys.G) { _gizmoMode = GizmoMode.Translate; return; }
+            // Gizmo mode berlaku di Object Mode & Edit Mode. Di Pose Mode
+            // cuma Rotate yang punya arti (rotasi bone), jadi G/S diabaikan.
+            if (e.KeyCode == Keys.G && !_isPoseMode) { _gizmoMode = GizmoMode.Translate; return; }
             if (e.KeyCode == Keys.R) { _gizmoMode = GizmoMode.Rotate; return; }
-            if (e.KeyCode == Keys.S) { _gizmoMode = GizmoMode.Scale; return; }
+            if (e.KeyCode == Keys.S && !_isPoseMode) { _gizmoMode = GizmoMode.Scale; return; }
 
             if (_isEditMode && _selectedObject?.EditMesh != null)
             {
@@ -548,9 +734,16 @@ namespace nirmana
                 return;
             }
 
+            // Pose mode: tidak ada tombol tambahan selain gizmo Rotate (ditangani lewat mouse drag).
+
             // Object mode
             if (e.KeyCode == Keys.Delete && _selectedObject != null)
             {
+                foreach (SceneObject obj in _sceneObjects)
+                {
+                    if (obj.SkinBinding?.ArmatureObject == _selectedObject) obj.SkinBinding = null;
+                }
+
                 _sceneObjects.Remove(_selectedObject);
                 _selectedObject.Mesh?.Dispose();
                 _selectedObject.Texture?.Dispose();
@@ -579,6 +772,8 @@ namespace nirmana
                     TryEditModeSelect(e.Location);
                 else if (_isEditMode && _selectedObject?.Skeleton != null)
                     TryBoneEditSelect(e.Location);
+                else if (_isPoseMode && _selectedObject?.Skeleton != null)
+                    TryPoseBoneSelect(e.Location);
                 else
                     TrySelectObject(e.Location);
             }
@@ -783,10 +978,41 @@ namespace nirmana
             RefreshSkeletonVisuals(_selectedObject);
         }
 
+        private void TryPoseBoneSelect(Point mouseLoc)
+        {
+            var (view, proj) = GetMatrices();
+            Matrix4 model = _selectedObject.GetModelMatrix();
+            Skeleton skel = _selectedObject.Skeleton;
+            var segs = skel.ComputePosedSegments();
+            Vector2 mousePx = new Vector2(mouseLoc.X, mouseLoc.Y);
+
+            int best = -1;
+            float bestDist = GizmoPickThresholdPx + 4f;
+
+            for (int i = 0; i < skel.Bones.Count; i++)
+            {
+                Vector3 headWorld = Vector3.TransformPosition(segs[i].head, model);
+                Vector3 tailWorld = Vector3.TransformPosition(segs[i].tail, model);
+                Vector2 headScreen = ViewportMath.WorldToScreen(headWorld, view, proj, _glControl.Width, _glControl.Height);
+                Vector2 tailScreen = ViewportMath.WorldToScreen(tailWorld, view, proj, _glControl.Width, _glControl.Height);
+
+                float dist = ViewportMath.DistancePointToSegment2D(mousePx, headScreen, tailScreen);
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    best = i;
+                }
+            }
+
+            skel.SelectedBone = best;
+            RefreshSkeletonVisuals(_selectedObject);
+        }
+
         private bool TryStartGizmoDrag(Point mouseLoc)
         {
             bool meshEdit = _isEditMode && _selectedObject?.EditMesh != null;
             bool boneEdit = _isEditMode && _selectedObject?.Skeleton != null;
+            bool poseEdit = _isPoseMode && _selectedObject?.Skeleton != null;
             bool faceMode = _editSelectionMode == EditSelectionMode.Face;
             GizmoMode effectiveMode = _gizmoMode;
 
@@ -801,6 +1027,15 @@ namespace nirmana
                 if (_selectedObject.Skeleton.SelectedBone < 0) return false;
                 Bone bone = _selectedObject.Skeleton.Bones[_selectedObject.Skeleton.SelectedBone];
                 origin = Vector3.TransformPosition(bone.Tail, _selectedObject.GetModelMatrix());
+            }
+            else if (poseEdit)
+            {
+                if (_selectedObject.Skeleton.SelectedBone < 0) return false;
+                if (effectiveMode != GizmoMode.Rotate) return false; // Pose Mode cuma dukung rotate
+
+                var segs = _selectedObject.Skeleton.ComputePosedSegments();
+                Vector3 posedTail = segs[_selectedObject.Skeleton.SelectedBone].tail;
+                origin = Vector3.TransformPosition(posedTail, _selectedObject.GetModelMatrix());
             }
             else
             {
@@ -847,7 +1082,7 @@ namespace nirmana
             if (bestAxis < 0) return false;
 
             _isDraggingGizmo = true;
-            _dragTarget = meshEdit ? DragTarget.MeshEdit : boneEdit ? DragTarget.BoneEdit : DragTarget.Object;
+            _dragTarget = meshEdit ? DragTarget.MeshEdit : boneEdit ? DragTarget.BoneEdit : poseEdit ? DragTarget.PoseEdit : DragTarget.Object;
             _dragGizmoMode = effectiveMode;
             _dragAxis = bestAxis;
             _dragStartMouse = mousePx;
@@ -883,6 +1118,11 @@ namespace nirmana
                 Bone bone = _selectedObject.Skeleton.Bones[_dragBoneIndex];
                 _dragBoneHeadLocal = bone.Head;
                 _dragBoneStartTailLocal = bone.Tail;
+            }
+            else if (poseEdit)
+            {
+                _dragBoneIndex = _selectedObject.Skeleton.SelectedBone;
+                _dragBoneStartPoseRotation = _selectedObject.Skeleton.Bones[_dragBoneIndex].PoseRotation;
             }
             else
             {
@@ -1038,6 +1278,18 @@ namespace nirmana
 
                     _selectedObject.Skeleton.SetBoneTail(_dragBoneIndex, newTailLocal);
                     RebuildSkeletonAfterEdit(_selectedObject);
+                }
+                else if (_dragTarget == DragTarget.PoseEdit)
+                {
+                    // PoseRotation = rotasi world-space, pivot otomatis di posisi
+                    // bone saat ini (setelah mengikuti pose parent) — lihat
+                    // Skeleton.ComputeSkinMatrices() untuk detail matematikanya.
+                    Quaternion deltaRotWorld = Quaternion.FromAxisAngle(axisDir, angleDelta);
+                    Bone bone = _selectedObject.Skeleton.Bones[_dragBoneIndex];
+                    bone.PoseRotation = Quaternion.Normalize(deltaRotWorld * _dragBoneStartPoseRotation);
+
+                    RefreshSkeletonVisuals(_selectedObject);
+                    RefreshSkinnedMeshesFor(_selectedObject);
                 }
                 else
                 {

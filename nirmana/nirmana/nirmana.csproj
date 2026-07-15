@@ -84,6 +84,7 @@
     <Compile Include="Rendering\Primitives.cs" />
     <Compile Include="Rendering\Shader.cs" />
     <Compile Include="Rendering\Skeleton.cs" />
+    <Compile Include="Rendering\SkinBinding.cs" />
     <Compile Include="Rendering\Texture.cs" />
     <Compile Include="Rendering\ViewportMath.cs" />
     <EmbeddedResource Include="MainForm.resx">

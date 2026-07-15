@@ -132,6 +132,22 @@ namespace nirmana.Rendering
         }
 
         /// <summary>
+        /// Jarak titik 3D ke sebuah segmen garis 3D (dipakai untuk auto-weight
+        /// skinning: jarak tiap vertex mesh ke tiap bone).
+        /// </summary>
+        public static float DistancePointToSegment3D(Vector3 point, Vector3 segA, Vector3 segB)
+        {
+            Vector3 ab = segB - segA;
+            float lengthSq = ab.LengthSquared;
+            if (lengthSq < 1e-8f) return (point - segA).Length;
+
+            float t = Vector3.Dot(point - segA, ab) / lengthSq;
+            t = MathHelper.Clamp(t, 0f, 1f);
+            Vector3 closest = segA + ab * t;
+            return (point - closest).Length;
+        }
+
+        /// <summary>
         /// Ray-triangle intersection (Moller-Trumbore). Dipakai untuk face
         /// picking di edit mode. Return jarak hit atau null kalau tidak kena.
         /// </summary>

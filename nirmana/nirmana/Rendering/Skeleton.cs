@@ -7,8 +7,9 @@ namespace nirmana.Rendering
     {
         public string Name;
         public int ParentIndex = -1; // -1 = root
-        public Vector3 Head; // local space (relative ke origin objek armature)
+        public Vector3 Head; // local space (relative ke origin objek armature), REST/BIND pose
         public Vector3 Tail;
+        public Quaternion PoseRotation = Quaternion.Identity; // rotasi pose saat ini (Pose Mode), world-space, pivot di head bone (setelah mengikuti parent)
     }
 
     /// <summary>
@@ -116,6 +117,67 @@ namespace nirmana.Rendering
 
             Vector3 pad = new Vector3(0.05f); // supaya AABB tidak nol di sumbu tipis, gampang diklik
             return (min - pad, max + pad);
+        }
+
+        // ---------- Skinning / Pose ----------
+
+        /// <summary>
+        /// Hitung skin matrix per bone: Invert(BindWorld) * PoseWorld.
+        /// Dipakai untuk deform mesh (linear blend skinning) maupun untuk
+        /// menggambar skeleton di posisi pose saat ini (bukan cuma bind).
+        /// Asumsi: index parent selalu lebih kecil dari index anaknya
+        /// (selalu benar karena AddBoneFromTail selalu menambah di akhir list,
+        /// dan DeleteBone menggeser index tapi tidak mengubah urutan relatif).
+        /// </summary>
+        public Matrix4[] ComputeSkinMatrices()
+        {
+            int n = Bones.Count;
+            Matrix4[] bindWorld = new Matrix4[n];
+            Matrix4[] poseWorld = new Matrix4[n];
+            Matrix4[] skin = new Matrix4[n];
+
+            for (int i = 0; i < n; i++)
+            {
+                bindWorld[i] = BoneGeometry.ComputeBindMatrix(Bones[i].Head, Bones[i].Tail);
+            }
+
+            for (int i = 0; i < n; i++)
+            {
+                int parent = Bones[i].ParentIndex;
+
+                // Posisi/orientasi bone ini kalau seandainya tidak ada rotasi pose
+                // tambahan sendiri, tapi tetap ikut mengalir dari pose parent-nya.
+                Matrix4 propagated = parent < 0
+                    ? bindWorld[i]
+                    : (bindWorld[i] * Matrix4.Invert(bindWorld[parent])) * poseWorld[parent];
+
+                // Rotasi pose bone ini sendiri diputar di sekitar pivot (posisi head
+                // setelah mengikuti parent), bukan di sekitar origin dunia.
+                Vector3 pivot = propagated.ExtractTranslation();
+                Matrix4 rot = Matrix4.CreateFromQuaternion(Bones[i].PoseRotation);
+
+                poseWorld[i] = propagated * Matrix4.CreateTranslation(-pivot) * rot * Matrix4.CreateTranslation(pivot);
+                skin[i] = Matrix4.Invert(bindWorld[i]) * poseWorld[i];
+            }
+
+            return skin;
+        }
+
+        /// <summary>Head/Tail tiap bone di posisi POSE saat ini (bukan bind/rest).</summary>
+        public (Vector3 head, Vector3 tail)[] ComputePosedSegments()
+        {
+            Matrix4[] skin = ComputeSkinMatrices();
+            var result = new (Vector3, Vector3)[Bones.Count];
+
+            for (int i = 0; i < Bones.Count; i++)
+            {
+                result[i] = (
+                    Vector3.TransformPosition(Bones[i].Head, skin[i]),
+                    Vector3.TransformPosition(Bones[i].Tail, skin[i])
+                );
+            }
+
+            return result;
         }
     }
 }
