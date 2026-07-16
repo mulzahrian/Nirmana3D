@@ -22,6 +22,9 @@ namespace nirmana.Rendering
         public List<Bone> Bones = new List<Bone>();
         public int SelectedBone = -1;
 
+        public List<AnimationClip> Clips = new List<AnimationClip>();
+        public int ActiveClipIndex = -1;
+
         public static Skeleton CreateDefault()
         {
             var skel = new Skeleton();

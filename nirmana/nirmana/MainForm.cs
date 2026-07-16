@@ -93,6 +93,20 @@ namespace nirmana
         private Vector3 _dragBoneStartTailLocal;
         private Quaternion _dragBoneStartPoseRotation;
 
+        // ---------- Timeline / Animation ----------
+        private Panel _timelinePanel;
+        private ComboBox _clipCombo;
+        private Button _btnNewClip;
+        private Button _btnDeleteClip;
+        private Button _btnInsertKeyframe;
+        private Button _btnPlayStop;
+        private TrackBar _timeline;
+        private Label _lblTime;
+
+        private bool _suppressClipComboEvent;
+        private bool _isPlaying;
+        private float _playbackTime;
+
         public MainForm()
         {
             Text = "BlenderClone - Starter Viewport";
@@ -102,12 +116,17 @@ namespace nirmana
             KeyPreview = true;
 
             BuildMenu();
+            BuildTimelinePanel();
             BuildGlControl();
 
             KeyDown += MainForm_KeyDown;
 
             _renderTimer = new Timer { Interval = 16 };
-            _renderTimer.Tick += (s, e) => _glControl.Invalidate();
+            _renderTimer.Tick += (s, e) =>
+            {
+                if (_isPlaying) AdvancePlayback(0.016f);
+                _glControl.Invalidate();
+            };
             _renderTimer.Start();
         }
 
@@ -139,6 +158,77 @@ namespace nirmana
 
             MainMenuStrip = menu;
             Controls.Add(menu);
+        }
+
+        private void BuildTimelinePanel()
+        {
+            _timelinePanel = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 74,
+                BackColor = Color.FromArgb(45, 45, 48)
+            };
+
+            FlowLayoutPanel row1 = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                Height = 34,
+                BackColor = Color.Transparent
+            };
+
+            Label lblClip = new Label { Text = "Clip:", ForeColor = Color.White, AutoSize = true, Margin = new Padding(6, 10, 2, 0) };
+            _clipCombo = new ComboBox { Width = 160, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(2, 6, 6, 0) };
+            _clipCombo.SelectedIndexChanged += ClipCombo_SelectedIndexChanged;
+
+            _btnNewClip = new Button { Text = "New Clip", AutoSize = true, Margin = new Padding(2, 5, 2, 0) };
+            _btnNewClip.Click += (s, e) => NewClip();
+
+            _btnDeleteClip = new Button { Text = "Delete Clip", AutoSize = true, Margin = new Padding(2, 5, 2, 0) };
+            _btnDeleteClip.Click += (s, e) => DeleteActiveClip();
+
+            row1.Controls.Add(lblClip);
+            row1.Controls.Add(_clipCombo);
+            row1.Controls.Add(_btnNewClip);
+            row1.Controls.Add(_btnDeleteClip);
+
+            Panel row2 = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
+
+            _btnInsertKeyframe = new Button { Text = "Insert Keyframe (I)", AutoSize = true, Location = new Point(6, 6) };
+            _btnInsertKeyframe.Click += (s, e) => InsertKeyframe();
+
+            _btnPlayStop = new Button { Text = "Play", Width = 60, Location = new Point(150, 6) };
+            _btnPlayStop.Click += (s, e) => TogglePlayback();
+
+            _lblTime = new Label { Text = "0.0s / 0.0s", ForeColor = Color.White, AutoSize = true, Location = new Point(220, 12) };
+
+            _timeline = new TrackBar
+            {
+                Minimum = 0,
+                Maximum = 50,
+                TickFrequency = 10,
+                Location = new Point(320, 0),
+                Width = 500,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            _timeline.Scroll += (s, e) =>
+            {
+                _playbackTime = _timeline.Value / 10f;
+                ApplyPoseAtCurrentTime();
+                UpdateTimeLabel();
+            };
+
+            row2.Controls.Add(_btnInsertKeyframe);
+            row2.Controls.Add(_btnPlayStop);
+            row2.Controls.Add(_lblTime);
+            row2.Controls.Add(_timeline);
+
+            _timelinePanel.Controls.Add(row2);
+            _timelinePanel.Controls.Add(row1);
+
+            Controls.Add(_timelinePanel);
+            _timelinePanel.BringToFront();
+
+            RefreshTimelinePanelForSelection();
         }
 
         private void BuildGlControl()
@@ -212,6 +302,7 @@ namespace nirmana
             _sceneObjects.Add(obj);
             _selectedObject = obj;
             _isEditMode = false;
+            RefreshTimelinePanelForSelection();
         }
 
         private void AddArmature()
@@ -231,6 +322,7 @@ namespace nirmana
             _sceneObjects.Add(obj);
             _selectedObject = obj;
             _isEditMode = false;
+            RefreshTimelinePanelForSelection();
         }
 
         private void RebuildSkeletonAfterEdit(SceneObject obj)
@@ -402,6 +494,178 @@ namespace nirmana
 
             meshObj.Mesh.Dispose();
             meshObj.Mesh = meshObj.EditMesh.BuildRenderMesh(deformed);
+        }
+
+        // ---------- Timeline / Animation ----------
+
+        private void RefreshTimelinePanelForSelection()
+        {
+            bool hasSkeleton = _selectedObject?.Skeleton != null;
+
+            _clipCombo.Enabled = hasSkeleton;
+            _btnNewClip.Enabled = hasSkeleton;
+            _btnDeleteClip.Enabled = hasSkeleton && _selectedObject.Skeleton.Clips.Count > 0;
+            _btnInsertKeyframe.Enabled = hasSkeleton;
+            _btnPlayStop.Enabled = hasSkeleton;
+            _timeline.Enabled = hasSkeleton;
+
+            _suppressClipComboEvent = true;
+            _clipCombo.Items.Clear();
+            if (hasSkeleton)
+            {
+                Skeleton skel = _selectedObject.Skeleton;
+                foreach (AnimationClip clip in skel.Clips) _clipCombo.Items.Add(clip.Name);
+                if (skel.ActiveClipIndex >= 0 && skel.ActiveClipIndex < skel.Clips.Count)
+                    _clipCombo.SelectedIndex = skel.ActiveClipIndex;
+            }
+            _suppressClipComboEvent = false;
+
+            UpdateTimelineRangeForActiveClip();
+            ApplyPoseAtCurrentTime();
+            UpdateTimeLabel();
+        }
+
+        private void ClipCombo_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_suppressClipComboEvent || _selectedObject?.Skeleton == null) return;
+
+            _selectedObject.Skeleton.ActiveClipIndex = _clipCombo.SelectedIndex;
+            _btnDeleteClip.Enabled = _selectedObject.Skeleton.Clips.Count > 0;
+            UpdateTimelineRangeForActiveClip();
+            ApplyPoseAtCurrentTime();
+            UpdateTimeLabel();
+        }
+
+        private void NewClip()
+        {
+            if (_selectedObject?.Skeleton == null) return;
+            Skeleton skel = _selectedObject.Skeleton;
+
+            string name = "Action";
+            int suffix = 1;
+            while (skel.Clips.Any(c => c.Name == name))
+            {
+                suffix++;
+                name = "Action." + suffix.ToString("00");
+            }
+
+            skel.Clips.Add(new AnimationClip { Name = name });
+            skel.ActiveClipIndex = skel.Clips.Count - 1;
+            RefreshTimelinePanelForSelection();
+        }
+
+        private void DeleteActiveClip()
+        {
+            if (_selectedObject?.Skeleton == null) return;
+            Skeleton skel = _selectedObject.Skeleton;
+            if (skel.ActiveClipIndex < 0 || skel.ActiveClipIndex >= skel.Clips.Count) return;
+
+            skel.Clips.RemoveAt(skel.ActiveClipIndex);
+            skel.ActiveClipIndex = skel.Clips.Count > 0 ? 0 : -1;
+            RefreshTimelinePanelForSelection();
+        }
+
+        private void InsertKeyframe()
+        {
+            if (_selectedObject?.Skeleton == null) return;
+            Skeleton skel = _selectedObject.Skeleton;
+
+            if (skel.ActiveClipIndex < 0 || skel.ActiveClipIndex >= skel.Clips.Count)
+            {
+                skel.Clips.Add(new AnimationClip { Name = "Action" });
+                skel.ActiveClipIndex = skel.Clips.Count - 1;
+            }
+
+            AnimationClip clip = skel.Clips[skel.ActiveClipIndex];
+
+            Dictionary<int, Quaternion> snapshot = new Dictionary<int, Quaternion>();
+            for (int i = 0; i < skel.Bones.Count; i++) snapshot[i] = skel.Bones[i].PoseRotation;
+
+            Keyframe existing = clip.Keyframes.FirstOrDefault(k => Math.Abs(k.Time - _playbackTime) < 0.001f);
+            if (existing != null)
+            {
+                existing.BoneRotations = snapshot;
+            }
+            else
+            {
+                clip.Keyframes.Add(new Keyframe { Time = _playbackTime, BoneRotations = snapshot });
+                clip.Keyframes.Sort((a, b) => a.Time.CompareTo(b.Time));
+            }
+
+            RefreshTimelinePanelForSelection();
+        }
+
+        private void TogglePlayback()
+        {
+            if (_selectedObject?.Skeleton == null) return;
+            _isPlaying = !_isPlaying;
+            _btnPlayStop.Text = _isPlaying ? "Stop" : "Play";
+        }
+
+        private void AdvancePlayback(float dt)
+        {
+            if (_selectedObject?.Skeleton == null) return;
+            Skeleton skel = _selectedObject.Skeleton;
+            if (skel.ActiveClipIndex < 0 || skel.ActiveClipIndex >= skel.Clips.Count) return;
+
+            float duration = skel.Clips[skel.ActiveClipIndex].Duration;
+            if (duration <= 0f) return;
+
+            _playbackTime += dt;
+            if (_playbackTime > duration) _playbackTime -= duration; // loop
+
+            int tick = (int)(_playbackTime * 10);
+            _timeline.Value = Math.Max(_timeline.Minimum, Math.Min(_timeline.Maximum, tick));
+
+            ApplyPoseAtCurrentTime();
+            UpdateTimeLabel();
+        }
+
+        /// <summary>Terapkan pose hasil evaluasi clip aktif di _playbackTime ke semua bone, lalu refresh visual & mesh yang di-bind.</summary>
+        private void ApplyPoseAtCurrentTime()
+        {
+            if (_selectedObject?.Skeleton == null) return;
+            Skeleton skel = _selectedObject.Skeleton;
+            if (skel.ActiveClipIndex < 0 || skel.ActiveClipIndex >= skel.Clips.Count) return;
+
+            AnimationClip clip = skel.Clips[skel.ActiveClipIndex];
+            for (int i = 0; i < skel.Bones.Count; i++)
+            {
+                skel.Bones[i].PoseRotation = clip.Evaluate(i, _playbackTime);
+            }
+
+            RefreshSkeletonVisuals(_selectedObject);
+            RefreshSkinnedMeshesFor(_selectedObject);
+        }
+
+        private void UpdateTimelineRangeForActiveClip()
+        {
+            float duration = 5f; // rentang minimum default kalau belum ada keyframe
+
+            if (_selectedObject?.Skeleton != null)
+            {
+                Skeleton skel = _selectedObject.Skeleton;
+                if (skel.ActiveClipIndex >= 0 && skel.ActiveClipIndex < skel.Clips.Count)
+                {
+                    duration = Math.Max(duration, skel.Clips[skel.ActiveClipIndex].Duration + 1f);
+                }
+            }
+
+            _timeline.Maximum = (int)(duration * 10);
+            if (_timeline.Value > _timeline.Maximum) _timeline.Value = _timeline.Maximum;
+        }
+
+        private void UpdateTimeLabel()
+        {
+            float duration = 0f;
+            if (_selectedObject?.Skeleton != null)
+            {
+                Skeleton skel = _selectedObject.Skeleton;
+                if (skel.ActiveClipIndex >= 0 && skel.ActiveClipIndex < skel.Clips.Count)
+                    duration = skel.Clips[skel.ActiveClipIndex].Duration;
+            }
+
+            _lblTime.Text = $"{_playbackTime:0.0}s / {duration:0.0}s";
         }
 
         private void LoadTextureForSelected()
@@ -668,6 +932,18 @@ namespace nirmana
                 return;
             }
 
+            if (e.KeyCode == Keys.I && _selectedObject?.Skeleton != null)
+            {
+                InsertKeyframe();
+                return;
+            }
+
+            if (e.KeyCode == Keys.Space && _selectedObject?.Skeleton != null)
+            {
+                TogglePlayback();
+                return;
+            }
+
             // Gizmo mode berlaku di Object Mode & Edit Mode. Di Pose Mode
             // cuma Rotate yang punya arti (rotasi bone), jadi G/S diabaikan.
             if (e.KeyCode == Keys.G && !_isPoseMode) { _gizmoMode = GizmoMode.Translate; return; }
@@ -748,6 +1024,7 @@ namespace nirmana
                 _selectedObject.Mesh?.Dispose();
                 _selectedObject.Texture?.Dispose();
                 _selectedObject = null;
+                RefreshTimelinePanelForSelection();
             }
         }
 
@@ -867,6 +1144,7 @@ namespace nirmana
             }
 
             _selectedObject = closest;
+            RefreshTimelinePanelForSelection();
         }
 
         private void TryEditModeSelect(Point mouseLoc)
