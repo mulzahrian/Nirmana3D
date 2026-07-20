@@ -182,5 +182,43 @@ namespace nirmana.Rendering
 
             return result;
         }
+
+        /// <summary>
+        /// Rotasi LOKAL (relatif ke parent) tiap bone untuk pose saat ini.
+        /// Dipakai saat export animasi ke format seperti glTF/FBX yang
+        /// butuh keyframe rotasi lokal per-node, bukan world-space seperti
+        /// PoseRotation internal kita.
+        /// </summary>
+        public Quaternion[] ComputeLocalPoseRotations()
+        {
+            int n = Bones.Count;
+            Matrix4[] bindWorld = new Matrix4[n];
+            Matrix4[] poseWorld = new Matrix4[n];
+            Quaternion[] localRot = new Quaternion[n];
+
+            for (int i = 0; i < n; i++)
+                bindWorld[i] = BoneGeometry.ComputeBindMatrix(Bones[i].Head, Bones[i].Tail);
+
+            for (int i = 0; i < n; i++)
+            {
+                int parent = Bones[i].ParentIndex;
+
+                Matrix4 propagated = parent < 0
+                    ? bindWorld[i]
+                    : (bindWorld[i] * Matrix4.Invert(bindWorld[parent])) * poseWorld[parent];
+
+                Vector3 pivot = propagated.ExtractTranslation();
+                Matrix4 rot = Matrix4.CreateFromQuaternion(Bones[i].PoseRotation);
+                poseWorld[i] = propagated * Matrix4.CreateTranslation(-pivot) * rot * Matrix4.CreateTranslation(pivot);
+
+                Matrix4 localPoseRelParent = parent < 0
+                    ? poseWorld[i]
+                    : poseWorld[i] * Matrix4.Invert(poseWorld[parent]);
+
+                localRot[i] = localPoseRelParent.ExtractRotation();
+            }
+
+            return localRot;
+        }
     }
 }

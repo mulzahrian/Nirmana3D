@@ -55,6 +55,24 @@ namespace nirmana.Rendering
             mesh.Faces.Add(new Face { Indices = idx.ToList() });
         }
 
+        /// <summary>
+        /// Bangun EditableMesh dari data mentah (dipakai waktu import file
+        /// OBJ/GLB/FBX lewat AssimpNet). Face dengan &lt;3 vertex dilewati.
+        /// </summary>
+        public static EditableMesh FromRawData(IEnumerable<Vector3> vertices, IEnumerable<int[]> faces)
+        {
+            EditableMesh mesh = new EditableMesh();
+            mesh.Vertices.AddRange(vertices);
+
+            foreach (int[] f in faces)
+            {
+                if (f.Length < 3) continue;
+                mesh.Faces.Add(new Face { Indices = f.ToList() });
+            }
+
+            return mesh;
+        }
+
         public Vector3 FaceNormal(Face face)
         {
             Vector3 a = Vertices[face.Indices[0]];
@@ -165,6 +183,55 @@ namespace nirmana.Rendering
                 max = Vector3.ComponentMax(max, v);
             }
             return (min, max);
+        }
+
+        /// <summary>
+        /// Data mesh siap export (dipakai SceneExporter): posisi/normal/uv per
+        /// sudut face (sama seperti BuildRenderMesh), plus originalVertexIndex
+        /// yang memetakan tiap sudut itu balik ke index vertex asli di
+        /// Vertices/SkinBinding (dibutuhkan supaya bobot skinning tetap benar
+        /// walau vertex diduplikasi per sudut face untuk UV/normal).
+        /// </summary>
+        public void BuildExportData(out Vector3[] positions, out Vector3[] normals, out Vector2[] uvs,
+            out int[] originalVertexIndex, out int[] triangleIndices)
+        {
+            List<Vector3> pos = new List<Vector3>();
+            List<Vector3> norm = new List<Vector3>();
+            List<Vector2> uv = new List<Vector2>();
+            List<int> orig = new List<int>();
+            List<int> tris = new List<int>();
+            int cursor = 0;
+
+            foreach (Face face in Faces)
+            {
+                Vector3 normal = FaceNormal(face);
+                int n = face.Indices.Count;
+
+                for (int k = 0; k < n; k++)
+                {
+                    int vi = face.Indices[k];
+                    Vector3 p = Vertices[vi];
+
+                    pos.Add(p);
+                    norm.Add(normal);
+                    uv.Add(ComputeBoxUV(p, normal));
+                    orig.Add(vi);
+                }
+
+                for (int k = 1; k < n - 1; k++)
+                {
+                    tris.Add(cursor);
+                    tris.Add(cursor + k);
+                    tris.Add(cursor + k + 1);
+                }
+                cursor += n;
+            }
+
+            positions = pos.ToArray();
+            normals = norm.ToArray();
+            uvs = uv.ToArray();
+            originalVertexIndex = orig.ToArray();
+            triangleIndices = tris.ToArray();
         }
 
         /// <summary>Garis edge unik (wireframe overlay), tandai yang termasuk face terpilih.</summary>
