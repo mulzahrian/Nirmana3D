@@ -108,11 +108,11 @@ namespace nirmana
         private bool _isPlaying;
         private float _playbackTime;
 
-        private Label _modeLabel;
+        private ModeBadge _modeBadge;
 
         public MainForm()
         {
-            Text = "Nirmana3D - Starter Viewport";
+            Text = "BlenderClone - Starter Viewport";
             Width = 1280;
             Height = 800;
             StartPosition = FormStartPosition.CenterScreen;
@@ -122,7 +122,9 @@ namespace nirmana
             BuildTimelinePanel();
             BuildGlControl();
 
-            KeyDown += MainForm_KeyDown;
+            // Semua shortcut keyboard sekarang ditangani lewat ProcessCmdKey()
+            // (lihat override di atas), bukan lewat event KeyDown biasa —
+            // supaya bekerja konsisten di manapun fokus keyboard berada.
 
             _renderTimer = new Timer { Interval = 16 };
             _renderTimer.Tick += (s, e) =>
@@ -139,12 +141,14 @@ namespace nirmana
         }
 
         /// <summary>
-        /// Intercept Tab & Ctrl+Tab di level Form, SEBELUM kontrol manapun
-        /// (ComboBox/Button/TrackBar di panel timeline) sempat memakainya
-        /// untuk navigasi fokus. Tab adalah tombol navigasi khusus di WinForms
-        /// — tanpa override ini, saat fokus keyboard sedang berada di salah
-        /// satu kontrol UI timeline, Tab/Ctrl+Tab bisa "dimakan" duluan oleh
-        /// sistem navigasi form dan tidak pernah sampai ke MainForm_KeyDown.
+        /// Semua shortcut keyboard (Tab, Ctrl+Tab, G/R/S, E/V, Delete, I,
+        /// Space, dst) ditangani di sini — bukan lewat event KeyDown biasa.
+        /// Alasannya: Tab & tombol navigasi lain bisa "dimakan" duluan oleh
+        /// sistem navigasi form kalau fokus keyboard sedang berada di salah
+        /// satu kontrol UI timeline (ComboBox/Button/TrackBar), sebelum
+        /// sempat sampai ke event KeyDown biasa. ProcessCmdKey dipanggil
+        /// lebih dulu dan bekerja di manapun fokus keyboard berada, jadi
+        /// SEMUA shortcut disatukan di jalur ini supaya konsisten.
         /// </summary>
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
@@ -158,7 +162,120 @@ namespace nirmana
                 ToggleEditMode();
                 return true;
             }
+
+            // Semua shortcut modeling/animasi lain (G/R/S/E/V/I/Space/Delete/1/3)
+            // JUGA ditangani di sini, bukan lewat event KeyDown biasa —
+            // alasannya sama seperti Tab: ProcessCmdKey bekerja di manapun
+            // fokus keyboard berada (viewport ATAU kontrol UI timeline),
+            // sedangkan event KeyDown biasa kadang tidak sampai/dilewati kalau
+            // fokus sedang di kontrol tertentu (ComboBox/Button/TrackBar).
+            if (HandleShortcutKey(keyData)) return true;
+
             return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        /// <summary>
+        /// Semua shortcut keyboard untuk modeling/rigging/animasi (di luar
+        /// Tab & Ctrl+Tab yang sudah ditangani terpisah di ProcessCmdKey).
+        /// Return true kalau key dikenali & sudah diproses.
+        /// </summary>
+        private bool HandleShortcutKey(Keys keyData)
+        {
+            if (keyData == Keys.I && _selectedObject?.Skeleton != null)
+            {
+                InsertKeyframe();
+                return true;
+            }
+
+            if (keyData == Keys.Space && _selectedObject?.Skeleton != null)
+            {
+                TogglePlayback();
+                return true;
+            }
+
+            // Gizmo mode berlaku di Object Mode & Edit Mode. Di Pose Mode
+            // cuma Rotate yang punya arti (rotasi bone), jadi G/S diabaikan.
+            if (keyData == Keys.G && !_isPoseMode) { _gizmoMode = GizmoMode.Translate; return true; }
+            if (keyData == Keys.R) { _gizmoMode = GizmoMode.Rotate; return true; }
+            if (keyData == Keys.S && !_isPoseMode) { _gizmoMode = GizmoMode.Scale; return true; }
+
+            if (_isEditMode && _selectedObject?.EditMesh != null)
+            {
+                EditableMesh em = _selectedObject.EditMesh;
+
+                if (keyData == Keys.D1) { SetEditSelectionMode(EditSelectionMode.Vertex); return true; }
+                if (keyData == Keys.D3) { SetEditSelectionMode(EditSelectionMode.Face); return true; }
+
+                if (keyData == Keys.E && _editSelectionMode == EditSelectionMode.Face && em.SelectedFace >= 0)
+                {
+                    em.ExtrudeSelectedFace();
+                    RebuildFromEditMesh(_selectedObject);
+                    RefreshEditVisuals();
+                    return true;
+                }
+
+                if (keyData == Keys.V && _editSelectionMode == EditSelectionMode.Face)
+                {
+                    if (em.SelectedFace >= 0) em.SubdivideSelectedFace();
+                    else em.SubdivideAll();
+
+                    RebuildFromEditMesh(_selectedObject);
+                    RefreshEditVisuals();
+                    return true;
+                }
+
+                if (keyData == Keys.Delete)
+                {
+                    if (_editSelectionMode == EditSelectionMode.Vertex) em.DeleteSelectedVertices();
+                    else em.DeleteSelectedFace();
+
+                    RebuildFromEditMesh(_selectedObject);
+                    RefreshEditVisuals();
+                    return true;
+                }
+
+                return false;
+            }
+
+            if (_isEditMode && _selectedObject?.Skeleton != null)
+            {
+                Skeleton skel = _selectedObject.Skeleton;
+
+                if (keyData == Keys.E && skel.SelectedBone >= 0)
+                {
+                    int newIdx = skel.AddBoneFromTail(skel.SelectedBone);
+                    if (newIdx >= 0) skel.SelectedBone = newIdx;
+                    RebuildSkeletonAfterEdit(_selectedObject);
+                    return true;
+                }
+
+                if (keyData == Keys.Delete && skel.SelectedBone >= 0)
+                {
+                    skel.DeleteBone(skel.SelectedBone);
+                    RebuildSkeletonAfterEdit(_selectedObject);
+                    return true;
+                }
+
+                return false;
+            }
+
+            // Object mode
+            if (keyData == Keys.Delete && _selectedObject != null)
+            {
+                foreach (SceneObject obj in _sceneObjects)
+                {
+                    if (obj.SkinBinding?.ArmatureObject == _selectedObject) obj.SkinBinding = null;
+                }
+
+                _sceneObjects.Remove(_selectedObject);
+                _selectedObject.Mesh?.Dispose();
+                _selectedObject.Texture?.Dispose();
+                _selectedObject = null;
+                RefreshTimelinePanelForSelection();
+                return true;
+            }
+
+            return false;
         }
 
         private void BuildMenu()
@@ -281,10 +398,13 @@ namespace nirmana
                 TabStop = false
             };
 
-            _glControl.PreviewKeyDown += (s, e) =>
-            {
-                if (e.KeyCode == Keys.Tab) e.IsInputKey = true;
-            };
+            // CATATAN: sebelumnya ada override PreviewKeyDown di sini yang
+            // memaksa Tab dianggap "input key biasa" khusus untuk GLControl.
+            // Itu dihapus karena ternyata membuat Tab MELOMPATI ProcessCmdKey
+            // (override di level Form yang menangani Tab/Ctrl+Tab secara
+            // global) setiap kali fokus keyboard ada di viewport — padahal
+            // itu situasi paling umum. ProcessCmdKey sekarang satu-satunya
+            // dan cukup untuk menangani Tab/Ctrl+Tab di manapun fokus berada.
 
             _glControl.Load += GlControl_Load;
             _glControl.Paint += (s, e) => Render();
@@ -298,52 +418,144 @@ namespace nirmana
             Controls.Add(_glControl);
             _glControl.BringToFront();
 
-            // Label indikator mode aktif (Object/Edit Mesh/Edit Armature/Pose),
+            // Badge indikator mode aktif (Object/Edit Mesh/Edit Armature/Pose),
             // ditaruh di pojok kiri-atas viewport supaya jelas kelihatan mode
             // mana yang sedang aktif — terutama buat mengecek apakah toggle
             // Tab/Ctrl+Tab benar-benar berhasil pindah mode atau tidak.
-            _modeLabel = new Label
-            {
-                AutoSize = true,
-                ForeColor = Color.White,
-                BackColor = Color.FromArgb(160, 30, 30, 30),
-                Font = new Font(Font.FontFamily, 10f, FontStyle.Bold),
-                Padding = new Padding(6, 3, 6, 3),
-                Location = new Point(8, 8)
-            };
-            Controls.Add(_modeLabel);
-            _modeLabel.BringToFront();
+            // Warna badge beda-beda per mode supaya gampang dibedakan sekilas.
+            _modeBadge = new ModeBadge { Location = new Point(10, 10) };
+            Controls.Add(_modeBadge);
+            _modeBadge.BringToFront();
             UpdateModeLabel();
         }
 
-        /// <summary>Perbarui teks label mode di pojok viewport sesuai state saat ini.</summary>
+        /// <summary>Perbarui badge mode di pojok viewport: judul mode, detail objek, dan warna sesuai state saat ini.</summary>
         private void UpdateModeLabel()
         {
-            if (_modeLabel == null) return;
+            if (_modeBadge == null) return;
 
-            string text;
+            string title;
+            string subtitle;
+            Color accent;
+
             if (_selectedObject == null)
             {
-                text = "Object Mode (tidak ada objek terpilih)";
+                title = "OBJECT MODE";
+                subtitle = "Tidak ada objek terpilih";
+                accent = Color.FromArgb(90, 90, 96);
             }
             else if (_isPoseMode)
             {
-                text = $"Pose Mode — {_selectedObject.Name}";
+                title = "POSE MODE";
+                subtitle = _selectedObject.Name + "  ·  R untuk putar bone";
+                accent = Color.FromArgb(150, 60, 190);
             }
             else if (_isEditMode && _selectedObject.Skeleton != null)
             {
-                text = $"Edit Mode (Armature) — {_selectedObject.Name}";
+                title = "EDIT MODE — ARMATURE";
+                subtitle = _selectedObject.Name + "  ·  E extrude · Delete hapus bone";
+                accent = Color.FromArgb(20, 150, 160);
             }
             else if (_isEditMode && _selectedObject.EditMesh != null)
             {
-                text = $"Edit Mode (Mesh) — {_selectedObject.Name}";
+                title = "EDIT MODE — MESH";
+                subtitle = _selectedObject.Name + "  ·  G/R/S · E extrude · V subdivide";
+                accent = Color.FromArgb(210, 130, 20);
             }
             else
             {
-                text = $"Object Mode — {_selectedObject.Name}";
+                title = "OBJECT MODE";
+                subtitle = _selectedObject.Name + "  ·  Tab edit · G/R/S transform";
+                accent = Color.FromArgb(55, 120, 200);
             }
 
-            _modeLabel.Text = text;
+            _modeBadge.UpdateContent(title, subtitle, accent);
+        }
+
+        /// <summary>
+        /// Badge kecil dengan sudut membulat, warna solid, dan 2 baris teks
+        /// (judul mode tebal + subtitle detail) — dipakai sebagai indikator
+        /// mode aktif di pojok viewport. Ukurannya auto-fit ke teks-nya.
+        /// </summary>
+        private class ModeBadge : Control
+        {
+            private string _title = "";
+            private string _subtitle = "";
+            private Color _accent = Color.Gray;
+            private readonly Font _titleFont = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+            private readonly Font _subFont = new Font("Segoe UI", 8f, FontStyle.Regular);
+
+            public ModeBadge()
+            {
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                          ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                          ControlStyles.SupportsTransparentBackColor, true);
+                BackColor = Color.Transparent;
+            }
+
+            public void UpdateContent(string title, string subtitle, Color accent)
+            {
+                _title = title;
+                _subtitle = subtitle;
+                _accent = accent;
+
+                using (Graphics g = CreateGraphics())
+                {
+                    float titleWidth = g.MeasureString(_title, _titleFont).Width;
+                    float subWidth = g.MeasureString(_subtitle, _subFont).Width;
+                    int width = (int)Math.Ceiling(Math.Max(titleWidth, subWidth)) + 24;
+                    Size = new Size(Math.Max(width, 140), 44);
+                }
+                Invalidate();
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                Graphics g = e.Graphics;
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+                Rectangle rect = new Rectangle(0, 0, Width - 1, Height - 1);
+                using (System.Drawing.Drawing2D.GraphicsPath path = RoundedRect(rect, 9))
+                {
+                    using (SolidBrush shadow = new SolidBrush(Color.FromArgb(60, 0, 0, 0)))
+                    {
+                        Rectangle shadowRect = rect;
+                        shadowRect.Offset(0, 2);
+                        using (var shadowPath = RoundedRect(shadowRect, 9)) g.FillPath(shadow, shadowPath);
+                    }
+
+                    using (SolidBrush bg = new SolidBrush(_accent))
+                        g.FillPath(bg, path);
+
+                    using (Pen border = new Pen(Color.FromArgb(80, 255, 255, 255), 1f))
+                        g.DrawPath(border, path);
+                }
+
+                using (SolidBrush titleBrush = new SolidBrush(Color.White))
+                using (SolidBrush subBrush = new SolidBrush(Color.FromArgb(235, 255, 255, 255)))
+                {
+                    g.DrawString(_title, _titleFont, titleBrush, 12, 6);
+                    g.DrawString(_subtitle, _subFont, subBrush, 12, 24);
+                }
+            }
+
+            private static System.Drawing.Drawing2D.GraphicsPath RoundedRect(Rectangle bounds, int radius)
+            {
+                int d = radius * 2;
+                var path = new System.Drawing.Drawing2D.GraphicsPath();
+                path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
+                path.AddArc(bounds.Right - d, bounds.Y, d, d, 270, 90);
+                path.AddArc(bounds.Right - d, bounds.Bottom - d, d, d, 0, 90);
+                path.AddArc(bounds.X, bounds.Bottom - d, d, d, 90, 90);
+                path.CloseFigure();
+                return path;
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing) { _titleFont.Dispose(); _subFont.Dispose(); }
+                base.Dispose(disposing);
+            }
         }
 
         private void GlControl_Load(object sender, EventArgs e)
@@ -920,6 +1132,14 @@ namespace nirmana
 
             _isPoseMode = false;
             _isEditMode = !_isEditMode;
+
+            // Reset gizmo ke Move (Translate) setiap masuk Edit Mode, supaya
+            // tidak "nyangkut" di Rotate kalau sebelumnya kamu baru keluar dari
+            // Pose Mode (yang memaksa gizmo jadi Rotate-only). Tanpa reset ini,
+            // drag vertex/face akan terasa tidak merespons karena gizmo yang
+            // muncul adalah lingkaran Rotate, bukan panah Move.
+            if (_isEditMode) _gizmoMode = GizmoMode.Translate;
+
             if (!_isEditMode)
             {
                 if (_selectedObject.EditMesh != null)
@@ -955,6 +1175,7 @@ namespace nirmana
             else
             {
                 _selectedObject.Skeleton.SelectedBone = -1;
+                _gizmoMode = GizmoMode.Translate; // balik ke default waktu kembali ke Object Mode
             }
 
             RefreshSkeletonVisuals(_selectedObject);
@@ -1015,108 +1236,7 @@ namespace nirmana
         }
 
         // ---------- Input: keyboard ----------
-
-        private void MainForm_KeyDown(object sender, KeyEventArgs e)
-        {
-            // Tab & Ctrl+Tab (ganti mode Edit/Pose) ditangani di ProcessCmdKey(),
-            // supaya tetap jalan walau fokus keyboard sedang di kontrol UI
-            // timeline (ComboBox/Button/TrackBar), bukan cuma saat viewport fokus.
-
-            if (e.KeyCode == Keys.I && _selectedObject?.Skeleton != null)
-            {
-                InsertKeyframe();
-                return;
-            }
-
-            if (e.KeyCode == Keys.Space && _selectedObject?.Skeleton != null)
-            {
-                TogglePlayback();
-                return;
-            }
-
-            // Gizmo mode berlaku di Object Mode & Edit Mode. Di Pose Mode
-            // cuma Rotate yang punya arti (rotasi bone), jadi G/S diabaikan.
-            if (e.KeyCode == Keys.G && !_isPoseMode) { _gizmoMode = GizmoMode.Translate; return; }
-            if (e.KeyCode == Keys.R) { _gizmoMode = GizmoMode.Rotate; return; }
-            if (e.KeyCode == Keys.S && !_isPoseMode) { _gizmoMode = GizmoMode.Scale; return; }
-
-            if (_isEditMode && _selectedObject?.EditMesh != null)
-            {
-                EditableMesh em = _selectedObject.EditMesh;
-
-                if (e.KeyCode == Keys.D1) { SetEditSelectionMode(EditSelectionMode.Vertex); return; }
-                if (e.KeyCode == Keys.D3) { SetEditSelectionMode(EditSelectionMode.Face); return; }
-
-                if (e.KeyCode == Keys.E && _editSelectionMode == EditSelectionMode.Face && em.SelectedFace >= 0)
-                {
-                    em.ExtrudeSelectedFace();
-                    RebuildFromEditMesh(_selectedObject);
-                    RefreshEditVisuals();
-                    return;
-                }
-
-                if (e.KeyCode == Keys.V && _editSelectionMode == EditSelectionMode.Face)
-                {
-                    if (em.SelectedFace >= 0) em.SubdivideSelectedFace();
-                    else em.SubdivideAll();
-
-                    RebuildFromEditMesh(_selectedObject);
-                    RefreshEditVisuals();
-                    return;
-                }
-
-                if (e.KeyCode == Keys.Delete)
-                {
-                    if (_editSelectionMode == EditSelectionMode.Vertex) em.DeleteSelectedVertices();
-                    else em.DeleteSelectedFace();
-
-                    RebuildFromEditMesh(_selectedObject);
-                    RefreshEditVisuals();
-                    return;
-                }
-
-                return;
-            }
-
-            if (_isEditMode && _selectedObject?.Skeleton != null)
-            {
-                Skeleton skel = _selectedObject.Skeleton;
-
-                if (e.KeyCode == Keys.E && skel.SelectedBone >= 0)
-                {
-                    int newIdx = skel.AddBoneFromTail(skel.SelectedBone);
-                    if (newIdx >= 0) skel.SelectedBone = newIdx;
-                    RebuildSkeletonAfterEdit(_selectedObject);
-                    return;
-                }
-
-                if (e.KeyCode == Keys.Delete && skel.SelectedBone >= 0)
-                {
-                    skel.DeleteBone(skel.SelectedBone);
-                    RebuildSkeletonAfterEdit(_selectedObject);
-                    return;
-                }
-
-                return;
-            }
-
-            // Pose mode: tidak ada tombol tambahan selain gizmo Rotate (ditangani lewat mouse drag).
-
-            // Object mode
-            if (e.KeyCode == Keys.Delete && _selectedObject != null)
-            {
-                foreach (SceneObject obj in _sceneObjects)
-                {
-                    if (obj.SkinBinding?.ArmatureObject == _selectedObject) obj.SkinBinding = null;
-                }
-
-                _sceneObjects.Remove(_selectedObject);
-                _selectedObject.Mesh?.Dispose();
-                _selectedObject.Texture?.Dispose();
-                _selectedObject = null;
-                RefreshTimelinePanelForSelection();
-            }
-        }
+        // (Semua logic shortcut sudah dipindah ke HandleShortcutKey(), dipanggil dari ProcessCmdKey() di atas.)
 
         // ---------- Input: mouse ----------
 
