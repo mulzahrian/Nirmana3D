@@ -108,9 +108,11 @@ namespace nirmana
         private bool _isPlaying;
         private float _playbackTime;
 
+        private Label _modeLabel;
+
         public MainForm()
         {
-            Text = "BlenderClone - Starter Viewport";
+            Text = "Nirmana3D - Starter Viewport";
             Width = 1280;
             Height = 800;
             StartPosition = FormStartPosition.CenterScreen;
@@ -129,6 +131,34 @@ namespace nirmana
                 _glControl.Invalidate();
             };
             _renderTimer.Start();
+
+            // Fokus awal diarahkan ke viewport 3D (bukan ke kontrol timeline),
+            // supaya shortcut keyboard (Tab, G/R/S, dst) langsung bisa dipakai
+            // begitu aplikasi terbuka, tanpa perlu klik viewport dulu.
+            Shown += (s, e) => _glControl.Focus();
+        }
+
+        /// <summary>
+        /// Intercept Tab & Ctrl+Tab di level Form, SEBELUM kontrol manapun
+        /// (ComboBox/Button/TrackBar di panel timeline) sempat memakainya
+        /// untuk navigasi fokus. Tab adalah tombol navigasi khusus di WinForms
+        /// — tanpa override ini, saat fokus keyboard sedang berada di salah
+        /// satu kontrol UI timeline, Tab/Ctrl+Tab bisa "dimakan" duluan oleh
+        /// sistem navigasi form dan tidak pernah sampai ke MainForm_KeyDown.
+        /// </summary>
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == (Keys.Control | Keys.Tab))
+            {
+                TogglePoseMode();
+                return true;
+            }
+            if (keyData == Keys.Tab)
+            {
+                ToggleEditMode();
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
         private void BuildMenu()
@@ -187,13 +217,13 @@ namespace nirmana
 
             Label lblClip = new Label { Text = "Clip:", ForeColor = Color.White, AutoSize = true, Margin = new Padding(6, 10, 2, 0) };
             _clipCombo = new ComboBox { Width = 160, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(2, 6, 6, 0) };
-            _clipCombo.SelectedIndexChanged += ClipCombo_SelectedIndexChanged;
+            _clipCombo.SelectedIndexChanged += (s, e) => { ClipCombo_SelectedIndexChanged(s, e); _glControl?.Focus(); };
 
             _btnNewClip = new Button { Text = "New Clip", AutoSize = true, Margin = new Padding(2, 5, 2, 0) };
-            _btnNewClip.Click += (s, e) => NewClip();
+            _btnNewClip.Click += (s, e) => { NewClip(); _glControl.Focus(); };
 
             _btnDeleteClip = new Button { Text = "Delete Clip", AutoSize = true, Margin = new Padding(2, 5, 2, 0) };
-            _btnDeleteClip.Click += (s, e) => DeleteActiveClip();
+            _btnDeleteClip.Click += (s, e) => { DeleteActiveClip(); _glControl.Focus(); };
 
             row1.Controls.Add(lblClip);
             row1.Controls.Add(_clipCombo);
@@ -203,10 +233,10 @@ namespace nirmana
             Panel row2 = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
 
             _btnInsertKeyframe = new Button { Text = "Insert Keyframe (I)", AutoSize = true, Location = new Point(6, 6) };
-            _btnInsertKeyframe.Click += (s, e) => InsertKeyframe();
+            _btnInsertKeyframe.Click += (s, e) => { InsertKeyframe(); _glControl.Focus(); };
 
             _btnPlayStop = new Button { Text = "Play", Width = 60, Location = new Point(150, 6) };
-            _btnPlayStop.Click += (s, e) => TogglePlayback();
+            _btnPlayStop.Click += (s, e) => { TogglePlayback(); _glControl.Focus(); };
 
             _lblTime = new Label { Text = "0.0s / 0.0s", ForeColor = Color.White, AutoSize = true, Location = new Point(220, 12) };
 
@@ -225,6 +255,7 @@ namespace nirmana
                 ApplyPoseAtCurrentTime();
                 UpdateTimeLabel();
             };
+            _timeline.MouseUp += (s, e) => _glControl.Focus();
 
             row2.Controls.Add(_btnInsertKeyframe);
             row2.Controls.Add(_btnPlayStop);
@@ -266,6 +297,53 @@ namespace nirmana
 
             Controls.Add(_glControl);
             _glControl.BringToFront();
+
+            // Label indikator mode aktif (Object/Edit Mesh/Edit Armature/Pose),
+            // ditaruh di pojok kiri-atas viewport supaya jelas kelihatan mode
+            // mana yang sedang aktif — terutama buat mengecek apakah toggle
+            // Tab/Ctrl+Tab benar-benar berhasil pindah mode atau tidak.
+            _modeLabel = new Label
+            {
+                AutoSize = true,
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(160, 30, 30, 30),
+                Font = new Font(Font.FontFamily, 10f, FontStyle.Bold),
+                Padding = new Padding(6, 3, 6, 3),
+                Location = new Point(8, 8)
+            };
+            Controls.Add(_modeLabel);
+            _modeLabel.BringToFront();
+            UpdateModeLabel();
+        }
+
+        /// <summary>Perbarui teks label mode di pojok viewport sesuai state saat ini.</summary>
+        private void UpdateModeLabel()
+        {
+            if (_modeLabel == null) return;
+
+            string text;
+            if (_selectedObject == null)
+            {
+                text = "Object Mode (tidak ada objek terpilih)";
+            }
+            else if (_isPoseMode)
+            {
+                text = $"Pose Mode — {_selectedObject.Name}";
+            }
+            else if (_isEditMode && _selectedObject.Skeleton != null)
+            {
+                text = $"Edit Mode (Armature) — {_selectedObject.Name}";
+            }
+            else if (_isEditMode && _selectedObject.EditMesh != null)
+            {
+                text = $"Edit Mode (Mesh) — {_selectedObject.Name}";
+            }
+            else
+            {
+                text = $"Object Mode — {_selectedObject.Name}";
+            }
+
+            _modeLabel.Text = text;
         }
 
         private void GlControl_Load(object sender, EventArgs e)
@@ -532,6 +610,7 @@ namespace nirmana
             UpdateTimelineRangeForActiveClip();
             ApplyPoseAtCurrentTime();
             UpdateTimeLabel();
+            UpdateModeLabel();
         }
 
         private void ClipCombo_SelectedIndexChanged(object sender, EventArgs e)
@@ -833,7 +912,11 @@ namespace nirmana
         private void ToggleEditMode()
         {
             bool supportsEdit = _selectedObject?.EditMesh != null || _selectedObject?.Skeleton != null;
-            if (!supportsEdit) return;
+            if (!supportsEdit)
+            {
+                UpdateModeLabel();
+                return;
+            }
 
             _isPoseMode = false;
             _isEditMode = !_isEditMode;
@@ -851,11 +934,16 @@ namespace nirmana
                 }
             }
             RefreshEditVisuals();
+            UpdateModeLabel();
         }
 
         private void TogglePoseMode()
         {
-            if (_selectedObject?.Skeleton == null) return;
+            if (_selectedObject?.Skeleton == null)
+            {
+                UpdateModeLabel();
+                return;
+            }
 
             _isEditMode = false;
             _isPoseMode = !_isPoseMode;
@@ -870,6 +958,7 @@ namespace nirmana
             }
 
             RefreshSkeletonVisuals(_selectedObject);
+            UpdateModeLabel();
         }
 
         private void SetEditSelectionMode(EditSelectionMode mode)
@@ -929,17 +1018,9 @@ namespace nirmana
 
         private void MainForm_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.KeyCode == Keys.Tab && e.Control)
-            {
-                TogglePoseMode();
-                return;
-            }
-
-            if (e.KeyCode == Keys.Tab)
-            {
-                ToggleEditMode();
-                return;
-            }
+            // Tab & Ctrl+Tab (ganti mode Edit/Pose) ditangani di ProcessCmdKey(),
+            // supaya tetap jalan walau fokus keyboard sedang di kontrol UI
+            // timeline (ComboBox/Button/TrackBar), bukan cuma saat viewport fokus.
 
             if (e.KeyCode == Keys.I && _selectedObject?.Skeleton != null)
             {
