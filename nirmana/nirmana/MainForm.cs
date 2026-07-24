@@ -112,7 +112,7 @@ namespace nirmana
 
         public MainForm()
         {
-            Text = "BlenderClone - Starter Viewport";
+            Text = "Nirmana3D - Starter Viewport";
             Width = 1280;
             Height = 800;
             StartPosition = FormStartPosition.CenterScreen;
