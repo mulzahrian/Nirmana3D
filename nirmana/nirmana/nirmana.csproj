@@ -72,11 +72,51 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Enums.cs" />
     <Compile Include="MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="MainForm.Designer.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Mainform.export.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Mainform.import.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Mainform.input.gizmo.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Mainform.input.keyboard.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Mainform.input.mouse.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Mainform.modeswitching.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Mainform.outliner.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Mainform.render.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Mainform.rigging.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Mainform.scenemanagement.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Mainform.timeline.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Mainform.ui.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Modebadge.cs">
+      <SubType>Component</SubType>
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
@@ -93,6 +133,7 @@
     <Compile Include="Rendering\SkinBinding.cs" />
     <Compile Include="Rendering\Texture.cs" />
     <Compile Include="Rendering\ViewportMath.cs" />
+    <Compile Include="Sceneobject.cs" />
     <EmbeddedResource Include="MainForm.resx">
       <DependentUpon>MainForm.cs</DependentUpon>
     </EmbeddedResource>
