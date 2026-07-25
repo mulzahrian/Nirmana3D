@@ -152,10 +152,14 @@ namespace nirmana
             _glControl.BringToFront();
 
             // Badge indikator mode aktif (Object/Edit Mesh/Edit Armature/Pose),
-            // ditaruh di pojok kiri-atas viewport supaya jelas kelihatan mode
-            // mana yang sedang aktif. Warna badge beda-beda per mode supaya
-            // gampang dibedakan sekilas tanpa perlu baca teksnya.
-            _modeBadge = new ModeBadge { Location = new Point(10, 10) };
+            // ditaruh di pojok kiri-atas VIEWPORT (di bawah menu strip) supaya
+            // jelas kelihatan mode mana yang sedang aktif tanpa menutupi menu
+            // File/View/dst. Y dihitung dari tinggi MainMenuStrip yang sebenarnya
+            // (bukan angka mutlak) supaya tidak nabrak menu di ukuran font/DPI
+            // berapa pun. Warna badge beda-beda per mode supaya gampang
+            // dibedakan sekilas tanpa perlu baca teksnya.
+            int menuHeight = MainMenuStrip?.Height ?? 24;
+            _modeBadge = new ModeBadge { Location = new Point(10, menuHeight + 8) };
             Controls.Add(_modeBadge);
             _modeBadge.BringToFront();
             UpdateModeLabel();
