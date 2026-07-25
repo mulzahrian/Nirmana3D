@@ -362,6 +362,67 @@ namespace nirmana.Rendering
             return Vertices.Count - 1;
         }
 
+        // ---------- Bulge / Inflate (Poke + push center) ----------
+
+        /// <summary>
+        /// "Poke" face terpilih: tambah 1 vertex di tengah (centroid), lalu
+        /// pecah face itu jadi beberapa triangle (kipas) yang terhubung ke
+        /// titik tengah itu. Ini langkah pertama fitur Bulge/Inflate —
+        /// kalau face datar cuma didorong rata sebagai satu bidang, hasilnya
+        /// TETAP RATA (tidak melengkung), karena tidak ada titik perantara.
+        /// Dengan 1 titik tengah baru, titik itu bisa didorong keluar
+        /// membentuk kubah/lengkungan.
+        /// </summary>
+        public (int centerIndex, List<int> ringIndices, Vector3 normal, Vector3 centerRestPos)? PokeSelectedFace()
+        {
+            if (SelectedFace < 0 || SelectedFace >= Faces.Count) return null;
+
+            Face face = Faces[SelectedFace];
+            Vector3 normal = FaceNormal(face);
+            Vector3 centroid = FaceCentroid(face);
+
+            Vertices.Add(centroid);
+            int centerIndex = Vertices.Count - 1;
+
+            List<int> ring = new List<int>(face.Indices);
+            int n = ring.Count;
+
+            Faces.RemoveAt(SelectedFace);
+
+            List<Face> fan = new List<Face>();
+            for (int i = 0; i < n; i++)
+            {
+                int a = ring[i];
+                int b = ring[(i + 1) % n];
+                fan.Add(new Face { Indices = new List<int> { a, b, centerIndex } });
+            }
+            Faces.InsertRange(SelectedFace, fan);
+
+            SelectedFace = -1;
+
+            return (centerIndex, ring, normal, centroid);
+        }
+
+        /// <summary>
+        /// Set posisi titik tengah & ring hasil PokeSelectedFace() berdasarkan
+        /// besar "bulge" tertentu, DIHITUNG ULANG dari posisi rest (bukan
+        /// diakumulasi dari posisi saat ini) — supaya scroll/Space bolak-balik
+        /// tetap akurat dan bisa kembali rata kapan saja (amount = 0).
+        /// Ring digeser sebagian kecil (bukan sebesar titik tengah) supaya
+        /// profilnya membulat seperti kubah, bukan piramida lancip.
+        /// </summary>
+        public void ApplyBulge(int centerIndex, Vector3 centerRestPos, List<int> ringIndices,
+            List<Vector3> ringRestPositions, Vector3 normal, float amount)
+        {
+            Vertices[centerIndex] = centerRestPos + normal * amount;
+
+            const float ringFactor = 0.35f;
+            for (int i = 0; i < ringIndices.Count; i++)
+            {
+                Vertices[ringIndices[i]] = ringRestPositions[i] + normal * (amount * ringFactor);
+            }
+        }
+
         // ---------- Extrude ----------
 
         /// <summary>

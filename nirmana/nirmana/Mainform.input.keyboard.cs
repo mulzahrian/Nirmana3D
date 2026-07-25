@@ -68,6 +68,7 @@ namespace nirmana
 
                 if (keyData == Keys.E && _editSelectionMode == EditSelectionMode.Face && em.SelectedFace >= 0)
                 {
+                    ResetBulgeState();
                     em.ExtrudeSelectedFace();
                     RebuildFromEditMesh(_selectedObject);
                     RefreshEditVisuals();
@@ -76,6 +77,7 @@ namespace nirmana
 
                 if (keyData == Keys.V && _editSelectionMode == EditSelectionMode.Face)
                 {
+                    ResetBulgeState();
                     if (em.SelectedFace >= 0) em.SubdivideSelectedFace();
                     else em.SubdivideAll();
 
@@ -84,8 +86,18 @@ namespace nirmana
                     return true;
                 }
 
+                // Space = bulge/inflate sisi terpilih keluar (nudge bertahap,
+                // alternatif dari scroll mouse — lihat MainForm.Bulge.cs).
+                if (keyData == Keys.Space && _editSelectionMode == EditSelectionMode.Face &&
+                    (em.SelectedFace >= 0 || _bulgeActive))
+                {
+                    AdjustBulge(BulgeSpaceStep);
+                    return true;
+                }
+
                 if (keyData == Keys.Delete)
                 {
+                    ResetBulgeState();
                     if (_editSelectionMode == EditSelectionMode.Vertex) em.DeleteSelectedVertices();
                     else em.DeleteSelectedFace();
 

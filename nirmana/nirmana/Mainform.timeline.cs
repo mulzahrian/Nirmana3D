@@ -10,6 +10,8 @@ namespace nirmana
     {
         private void RefreshTimelinePanelForSelection()
         {
+            ResetBulgeState(); // objek/seleksi bisa berubah di sini — lepas "pegangan" bulge lama supaya tidak salah nyasar
+
             bool hasSkeleton = _selectedObject?.Skeleton != null;
 
             _clipCombo.Enabled = hasSkeleton;

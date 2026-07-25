@@ -15,6 +15,7 @@ namespace nirmana
                 return;
             }
 
+            ResetBulgeState();
             _isPoseMode = false;
             _isEditMode = !_isEditMode;
 
@@ -71,6 +72,7 @@ namespace nirmana
         {
             if (_selectedObject?.EditMesh == null || mode == _editSelectionMode) return;
 
+            ResetBulgeState();
             _editSelectionMode = mode;
             _selectedObject.EditMesh.SelectedVertices.Clear();
             _selectedObject.EditMesh.SelectedFace = -1;

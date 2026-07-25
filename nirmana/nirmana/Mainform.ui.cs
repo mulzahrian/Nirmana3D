@@ -195,7 +195,7 @@ namespace nirmana
             else if (_isEditMode && _selectedObject.EditMesh != null)
             {
                 title = "EDIT MODE — MESH";
-                subtitle = _selectedObject.Name + "  ·  G/R/S · E extrude · V subdivide";
+                subtitle = _selectedObject.Name + "  ·  G/R/S · E extrude · V subdivide · Scroll bulge";
                 accent = Color.FromArgb(210, 130, 20);
             }
             else

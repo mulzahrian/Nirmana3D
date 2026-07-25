@@ -75,6 +75,12 @@ namespace nirmana
 
         private void GlControl_MouseWheel(object sender, MouseEventArgs e)
         {
+            if (CanBulgeNow())
+            {
+                AdjustBulge(e.Delta * BulgeWheelSensitivity);
+                return;
+            }
+
             _camera.Zoom(e.Delta * 0.005f);
         }
 
@@ -130,6 +136,8 @@ namespace nirmana
 
         private void TryEditModeSelect(System.Drawing.Point mouseLoc)
         {
+            ResetBulgeState(); // klik baru = mulai sesi seleksi baru, lepas "pegangan" bulge lama
+
             var (view, proj) = GetMatrices();
             Ray worldRay = ViewportMath.ScreenPointToRay(mouseLoc.X, mouseLoc.Y, _glControl.Width, _glControl.Height, view, proj);
 
