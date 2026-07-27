@@ -362,64 +362,123 @@ namespace nirmana.Rendering
             return Vertices.Count - 1;
         }
 
-        // ---------- Bulge / Inflate (Poke + push center) ----------
+        // ---------- Bulge / Inflate (edge midpoints menonjol, sudut tetap diam) ----------
 
         /// <summary>
-        /// "Poke" face terpilih: tambah 1 vertex di tengah (centroid), lalu
-        /// pecah face itu jadi beberapa triangle (kipas) yang terhubung ke
-        /// titik tengah itu. Ini langkah pertama fitur Bulge/Inflate —
-        /// kalau face datar cuma didorong rata sebagai satu bidang, hasilnya
-        /// TETAP RATA (tidak melengkung), karena tidak ada titik perantara.
-        /// Dengan 1 titik tengah baru, titik itu bisa didorong keluar
-        /// membentuk kubah/lengkungan.
+        /// Data hasil PrepareBulge(): kumpulan vertex yang boleh digeser
+        /// (titik tengah tiap sisi/edge, dan titik tengah face kalau quad)
+        /// beserta posisi rest-nya, plus daftar sudut (corner) yang SENGAJA
+        /// TIDAK ikut disentuh sama sekali.
         /// </summary>
-        public (int centerIndex, List<int> ringIndices, Vector3 normal, Vector3 centerRestPos)? PokeSelectedFace()
+        public class BulgePrep
+        {
+            public List<int> CornerIndices;       // sudut asli — TIDAK pernah digeser
+            public List<int> EdgeMidIndices;       // titik tengah tiap sisi, urutan sama seperti edge (corner[i]-corner[i+1])
+            public List<Vector3> EdgeMidRestPositions;
+            public int? CenterIndex;               // cuma ada untuk quad (null untuk triangle)
+            public Vector3 CenterRestPos;
+            public Vector3 Normal;
+        }
+
+        /// <summary>
+        /// Siapkan face terpilih untuk di-bulge: pecah jadi lebih detail
+        /// (titik tengah tiap sisi + titik tengah face untuk quad), TAPI
+        /// sudut aslinya (corner) tetap di posisi semula. Ini supaya waktu
+        /// nanti titik tengah sisi didorong keluar, GARIS ANTAR SUDUT itu
+        /// sendiri yang melengkung/membusur — bukan cuma menonjol di satu
+        /// titik pusat sementara tepinya tetap lurus kaku.
+        /// Cuma dukung face segitiga/quad (sama seperti Subdivide).
+        /// </summary>
+        public BulgePrep PrepareBulge()
         {
             if (SelectedFace < 0 || SelectedFace >= Faces.Count) return null;
 
             Face face = Faces[SelectedFace];
+            int n = face.Indices.Count;
+            if (n != 3 && n != 4) return null;
+
             Vector3 normal = FaceNormal(face);
-            Vector3 centroid = FaceCentroid(face);
+            List<int> corners = new List<int>(face.Indices);
 
-            Vertices.Add(centroid);
-            int centerIndex = Vertices.Count - 1;
-
-            List<int> ring = new List<int>(face.Indices);
-            int n = ring.Count;
-
-            Faces.RemoveAt(SelectedFace);
-
-            List<Face> fan = new List<Face>();
+            List<int> edgeMids = new List<int>();
             for (int i = 0; i < n; i++)
             {
-                int a = ring[i];
-                int b = ring[(i + 1) % n];
-                fan.Add(new Face { Indices = new List<int> { a, b, centerIndex } });
+                int a = corners[i];
+                int b = corners[(i + 1) % n];
+                Vertices.Add((Vertices[a] + Vertices[b]) * 0.5f);
+                edgeMids.Add(Vertices.Count - 1);
             }
-            Faces.InsertRange(SelectedFace, fan);
 
+            int? centerIndex = null;
+            Vector3 centerRest = Vector3.Zero;
+
+            Faces.RemoveAt(SelectedFace);
+            List<Face> newFaces = new List<Face>();
+
+            if (n == 4)
+            {
+                Vector3 centerPos = (Vertices[corners[0]] + Vertices[corners[1]] + Vertices[corners[2]] + Vertices[corners[3]]) / 4f;
+                Vertices.Add(centerPos);
+                centerIndex = Vertices.Count - 1;
+                centerRest = centerPos;
+
+                for (int i = 0; i < 4; i++)
+                {
+                    int a = corners[i];
+                    int mNext = edgeMids[i];
+                    int mPrev = edgeMids[(i + 3) % 4];
+                    newFaces.Add(new Face { Indices = new List<int> { a, mNext, centerIndex.Value, mPrev } });
+                }
+            }
+            else // n == 3: 3 segitiga sudut + 1 segitiga tengah dari titik-titik edge
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    int a = corners[i];
+                    int mNext = edgeMids[i];
+                    int mPrev = edgeMids[(i + 2) % 3];
+                    newFaces.Add(new Face { Indices = new List<int> { a, mNext, mPrev } });
+                }
+                newFaces.Add(new Face { Indices = new List<int> { edgeMids[0], edgeMids[1], edgeMids[2] } });
+            }
+
+            Faces.InsertRange(SelectedFace, newFaces);
             SelectedFace = -1;
 
-            return (centerIndex, ring, normal, centroid);
+            List<Vector3> edgeMidRest = new List<Vector3>();
+            foreach (int idx in edgeMids) edgeMidRest.Add(Vertices[idx]);
+
+            return new BulgePrep
+            {
+                CornerIndices = corners,
+                EdgeMidIndices = edgeMids,
+                EdgeMidRestPositions = edgeMidRest,
+                CenterIndex = centerIndex,
+                CenterRestPos = centerRest,
+                Normal = normal
+            };
         }
 
         /// <summary>
-        /// Set posisi titik tengah & ring hasil PokeSelectedFace() berdasarkan
-        /// besar "bulge" tertentu, DIHITUNG ULANG dari posisi rest (bukan
-        /// diakumulasi dari posisi saat ini) — supaya scroll/Space bolak-balik
-        /// tetap akurat dan bisa kembali rata kapan saja (amount = 0).
-        /// Ring digeser sebagian kecil (bukan sebesar titik tengah) supaya
-        /// profilnya membulat seperti kubah, bukan piramida lancip.
+        /// Terapkan besar "bulge" tertentu ke hasil PrepareBulge(), DIHITUNG
+        /// ULANG dari posisi rest (bukan diakumulasi) supaya scroll/Space
+        /// bolak-balik tetap akurat. Sudut (corner) TIDAK PERNAH digeser —
+        /// cuma titik tengah tiap sisi (dan titik tengah face untuk quad)
+        /// yang didorong keluar, jadi garis dari sudut ke sudut (yang lewat
+        /// titik tengah sisi itu) yang melengkung.
         /// </summary>
-        public void ApplyBulge(int centerIndex, Vector3 centerRestPos, List<int> ringIndices,
-            List<Vector3> ringRestPositions, Vector3 normal, float amount)
+        public void ApplyBulge(BulgePrep prep, float amount)
         {
-            Vertices[centerIndex] = centerRestPos + normal * amount;
+            const float edgeFactor = 0.8f; // seberapa jauh titik tengah SISI ikut menonjol relatif ke titik tengah FACE
 
-            const float ringFactor = 0.35f;
-            for (int i = 0; i < ringIndices.Count; i++)
+            if (prep.CenterIndex.HasValue)
             {
-                Vertices[ringIndices[i]] = ringRestPositions[i] + normal * (amount * ringFactor);
+                Vertices[prep.CenterIndex.Value] = prep.CenterRestPos + prep.Normal * amount;
+            }
+
+            for (int i = 0; i < prep.EdgeMidIndices.Count; i++)
+            {
+                Vertices[prep.EdgeMidIndices[i]] = prep.EdgeMidRestPositions[i] + prep.Normal * (amount * edgeFactor);
             }
         }
 

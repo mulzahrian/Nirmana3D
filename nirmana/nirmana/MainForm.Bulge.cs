@@ -1,5 +1,4 @@
-﻿using System.Collections.Generic;
-using OpenTK;
+﻿using OpenTK;
 using nirmana.Rendering;
 
 namespace nirmana
@@ -10,20 +9,18 @@ namespace nirmana
         //
         // Alur pakainya: masuk Edit Mode, mode Face (3), klik salah satu
         // sisi -> scroll mouse wheel (atau tekan Space) -> sisi itu otomatis
-        // "dipoke" (nambah 1 titik tengah, dipecah jadi kipas segitiga)
-        // supaya ada titik yang bisa didorong keluar membentuk kubah/
-        // lengkungan — bukan cuma digeser rata seperti Extrude/Move biasa.
-        // Scroll/Space lanjut menambah besar lengkungannya real-time.
+        // disiapkan (PrepareBulge: nambah titik tengah tiap edge + titik
+        // tengah face, SUDUT ASLINYA TIDAK DIGESER) -> titik-titik baru itu
+        // didorong keluar. Karena sudut tetap diam dan titik tengah tiap
+        // GARIS TEPI (edge) yang menonjol, garis dari sudut ke sudut itu
+        // sendiri yang melengkung/membusur — bukan cuma menonjol di satu
+        // titik pusat doang sementara tepinya tetap lurus kaku.
 
         private const float BulgeWheelSensitivity = 0.001f;
         private const float BulgeSpaceStep = 0.1f;
 
         private bool _bulgeActive;
-        private int _bulgeCenterIndex = -1;
-        private List<int> _bulgeRingIndices;
-        private Vector3 _bulgeCenterRestPos;
-        private List<Vector3> _bulgeRingRestPositions;
-        private Vector3 _bulgeNormal;
+        private EditableMesh.BulgePrep _bulgePrep;
         private float _bulgeAmount;
 
         /// <summary>
@@ -48,23 +45,15 @@ namespace nirmana
 
             if (!_bulgeActive)
             {
-                var poked = em.PokeSelectedFace();
-                if (poked == null) return;
-
-                _bulgeCenterIndex = poked.Value.centerIndex;
-                _bulgeRingIndices = poked.Value.ringIndices;
-                _bulgeNormal = poked.Value.normal;
-                _bulgeCenterRestPos = poked.Value.centerRestPos;
-
-                _bulgeRingRestPositions = new List<Vector3>();
-                foreach (int idx in _bulgeRingIndices) _bulgeRingRestPositions.Add(em.Vertices[idx]);
+                _bulgePrep = em.PrepareBulge();
+                if (_bulgePrep == null) return; // face bukan tri/quad, belum didukung
 
                 _bulgeAmount = 0f;
                 _bulgeActive = true;
             }
 
             _bulgeAmount = MathHelper.Clamp(_bulgeAmount + delta, -3f, 3f);
-            em.ApplyBulge(_bulgeCenterIndex, _bulgeCenterRestPos, _bulgeRingIndices, _bulgeRingRestPositions, _bulgeNormal, _bulgeAmount);
+            em.ApplyBulge(_bulgePrep, _bulgeAmount);
 
             RebuildFromEditMesh(_selectedObject);
             RefreshEditVisuals();
@@ -82,9 +71,7 @@ namespace nirmana
         private void ResetBulgeState()
         {
             _bulgeActive = false;
-            _bulgeCenterIndex = -1;
-            _bulgeRingIndices = null;
-            _bulgeRingRestPositions = null;
+            _bulgePrep = null;
             _bulgeAmount = 0f;
         }
     }
