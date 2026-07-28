@@ -14,6 +14,10 @@ namespace nirmana
             MenuStrip menu = new MenuStrip();
 
             ToolStripMenuItem fileMenu = new ToolStripMenuItem("File");
+            fileMenu.DropDownItems.Add("Open...", null, (s, e) => { OpenProjectFileDialog(); _glControl?.Focus(); });
+            fileMenu.DropDownItems.Add("Save", null, (s, e) => { SaveProject(); _glControl?.Focus(); });
+            fileMenu.DropDownItems.Add("Save As...", null, (s, e) => { SaveProjectAs(); _glControl?.Focus(); });
+            fileMenu.DropDownItems.Add(new ToolStripSeparator());
             fileMenu.DropDownItems.Add("Import...", null, (s, e) => ImportSceneFileDialog());
             fileMenu.DropDownItems.Add(new ToolStripSeparator());
             fileMenu.DropDownItems.Add("Exit", null, (s, e) => Close());
