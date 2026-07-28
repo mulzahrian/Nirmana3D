@@ -33,6 +33,7 @@ namespace nirmana
 
             ToolStripMenuItem addMenu = new ToolStripMenuItem("Add");
             addMenu.DropDownItems.Add("Cube", null, (s, e) => AddCube());
+            addMenu.DropDownItems.Add("Rounded Box...", null, (s, e) => AddRoundedBoxDialog());
             addMenu.DropDownItems.Add("Sphere", null, (s, e) =>
                 AddObject(Primitives.CreateSphere(1f), null, "Sphere", Vector3.Zero, new Vector3(-1f), new Vector3(1f)));
             addMenu.DropDownItems.Add("Armature", null, (s, e) => AddArmature());
