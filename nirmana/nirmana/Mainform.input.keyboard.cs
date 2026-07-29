@@ -64,11 +64,13 @@ namespace nirmana
                 EditableMesh em = _selectedObject.EditMesh;
 
                 if (keyData == Keys.D1) { SetEditSelectionMode(EditSelectionMode.Vertex); return true; }
+                if (keyData == Keys.D2) { SetEditSelectionMode(EditSelectionMode.Edge); return true; }
                 if (keyData == Keys.D3) { SetEditSelectionMode(EditSelectionMode.Face); return true; }
 
                 if (keyData == Keys.E && _editSelectionMode == EditSelectionMode.Face && em.SelectedFace >= 0)
                 {
                     ResetBulgeState();
+                    ResetEdgeBevelState();
                     em.ExtrudeSelectedFace();
                     RebuildFromEditMesh(_selectedObject);
                     RefreshEditVisuals();
@@ -78,6 +80,7 @@ namespace nirmana
                 if (keyData == Keys.V && _editSelectionMode == EditSelectionMode.Face)
                 {
                     ResetBulgeState();
+                    ResetEdgeBevelState();
                     if (em.SelectedFace >= 0) em.SubdivideSelectedFace();
                     else em.SubdivideAll();
 
@@ -86,8 +89,9 @@ namespace nirmana
                     return true;
                 }
 
-                // Space = bulge/inflate sisi terpilih keluar (nudge bertahap,
-                // alternatif dari scroll mouse — lihat MainForm.Bulge.cs).
+                // Space = bulge/inflate sisi terpilih keluar (mode Face) ATAU
+                // bevel garis tepi terpilih (mode Edge) — nudge bertahap,
+                // alternatif dari scroll mouse.
                 if (keyData == Keys.Space && _editSelectionMode == EditSelectionMode.Face &&
                     (em.SelectedFace >= 0 || _bulgeActive))
                 {
@@ -95,12 +99,28 @@ namespace nirmana
                     return true;
                 }
 
-                if (keyData == Keys.Delete)
+                if (keyData == Keys.Space && _editSelectionMode == EditSelectionMode.Edge &&
+                    (em.SelectedEdgeA >= 0 || _edgeBevelActive))
+                {
+                    AdjustEdgeBevel(EdgeBevelSpaceStep);
+                    return true;
+                }
+
+                if (keyData == Keys.Delete && _editSelectionMode == EditSelectionMode.Vertex)
                 {
                     ResetBulgeState();
-                    if (_editSelectionMode == EditSelectionMode.Vertex) em.DeleteSelectedVertices();
-                    else em.DeleteSelectedFace();
+                    ResetEdgeBevelState();
+                    em.DeleteSelectedVertices();
+                    RebuildFromEditMesh(_selectedObject);
+                    RefreshEditVisuals();
+                    return true;
+                }
 
+                if (keyData == Keys.Delete && _editSelectionMode == EditSelectionMode.Face)
+                {
+                    ResetBulgeState();
+                    ResetEdgeBevelState();
+                    em.DeleteSelectedFace();
                     RebuildFromEditMesh(_selectedObject);
                     RefreshEditVisuals();
                     return true;

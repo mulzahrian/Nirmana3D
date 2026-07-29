@@ -199,8 +199,13 @@ namespace nirmana
             }
             else if (_isEditMode && _selectedObject.EditMesh != null)
             {
-                title = "EDIT MODE — MESH";
-                subtitle = _selectedObject.Name + "  ·  G/R/S · E extrude · V subdivide · Scroll bulge";
+                string modeHint = _editSelectionMode == EditSelectionMode.Vertex ? "Vertex(1)"
+                    : _editSelectionMode == EditSelectionMode.Edge ? "Edge(2)"
+                    : "Face(3)";
+                title = "EDIT MODE — MESH · " + modeHint;
+                subtitle = _editSelectionMode == EditSelectionMode.Edge
+                    ? _selectedObject.Name + "  ·  Klik garis · Scroll/Space bevel"
+                    : _selectedObject.Name + "  ·  G/R/S · E extrude · V subdivide · Scroll bulge";
                 accent = Color.FromArgb(210, 130, 20);
             }
             else

@@ -81,6 +81,12 @@ namespace nirmana
                 return;
             }
 
+            if (CanEdgeBevelNow())
+            {
+                AdjustEdgeBevel(e.Delta * EdgeBevelWheelSensitivity);
+                return;
+            }
+
             _camera.Zoom(e.Delta * 0.005f);
         }
 
@@ -137,6 +143,7 @@ namespace nirmana
         private void TryEditModeSelect(System.Drawing.Point mouseLoc)
         {
             ResetBulgeState(); // klik baru = mulai sesi seleksi baru, lepas "pegangan" bulge lama
+            ResetEdgeBevelState();
 
             var (view, proj) = GetMatrices();
             Ray worldRay = ViewportMath.ScreenPointToRay(mouseLoc.X, mouseLoc.Y, _glControl.Width, _glControl.Height, view, proj);
@@ -184,6 +191,31 @@ namespace nirmana
                 {
                     em.SelectedVertices.Clear();
                 }
+            }
+            else if (_editSelectionMode == EditSelectionMode.Edge)
+            {
+                Vector2 mousePx = new Vector2(mouseLoc.X, mouseLoc.Y);
+                int bestA = -1, bestB = -1;
+                float bestDist = VertexPickThresholdPx;
+
+                foreach (var edge in em.GetUniqueEdgesWithFaces())
+                {
+                    Vector3 worldA = Vector3.TransformPosition(em.Vertices[edge.a], model);
+                    Vector3 worldB = Vector3.TransformPosition(em.Vertices[edge.b], model);
+                    Vector2 screenA = ViewportMath.WorldToScreen(worldA, view, proj, _glControl.Width, _glControl.Height);
+                    Vector2 screenB = ViewportMath.WorldToScreen(worldB, view, proj, _glControl.Width, _glControl.Height);
+
+                    float dist = ViewportMath.DistancePointToSegment2D(mousePx, screenA, screenB);
+                    if (dist < bestDist)
+                    {
+                        bestDist = dist;
+                        bestA = edge.a;
+                        bestB = edge.b;
+                    }
+                }
+
+                em.SelectedEdgeA = bestA;
+                em.SelectedEdgeB = bestB;
             }
             else // Face mode
             {
