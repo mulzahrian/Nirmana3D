@@ -16,6 +16,7 @@ namespace nirmana
             }
 
             ResetBulgeState();
+            ResetEdgeBevelState();
             _isPoseMode = false;
             _isEditMode = !_isEditMode;
 
@@ -32,6 +33,8 @@ namespace nirmana
                 {
                     _selectedObject.EditMesh.SelectedVertices.Clear();
                     _selectedObject.EditMesh.SelectedFace = -1;
+                    _selectedObject.EditMesh.SelectedEdgeA = -1;
+                    _selectedObject.EditMesh.SelectedEdgeB = -1;
                 }
                 if (_selectedObject.Skeleton != null)
                 {
@@ -73,9 +76,12 @@ namespace nirmana
             if (_selectedObject?.EditMesh == null || mode == _editSelectionMode) return;
 
             ResetBulgeState();
+            ResetEdgeBevelState();
             _editSelectionMode = mode;
             _selectedObject.EditMesh.SelectedVertices.Clear();
             _selectedObject.EditMesh.SelectedFace = -1;
+            _selectedObject.EditMesh.SelectedEdgeA = -1;
+            _selectedObject.EditMesh.SelectedEdgeB = -1;
             RefreshEditVisuals();
         }
 
@@ -99,6 +105,8 @@ namespace nirmana
 
             EditableMesh em = _selectedObject.EditMesh;
             bool faceMode = _editSelectionMode == EditSelectionMode.Face;
+            bool edgeMode = _editSelectionMode == EditSelectionMode.Edge;
+            bool vertexMode = _editSelectionMode == EditSelectionMode.Vertex;
 
             Vector3 dimColor = new Vector3(0.85f, 0.85f, 0.85f);
             Vector3 selColor = new Vector3(1f, 0.55f, 0.1f);
@@ -108,10 +116,17 @@ namespace nirmana
             {
                 LineRenderer.AddLine(wire, edge.a, edge.b, edge.highlighted ? selColor : dimColor);
             }
+
+            if (edgeMode && em.SelectedEdgeA >= 0 && em.SelectedEdgeB >= 0
+                && em.SelectedEdgeA < em.Vertices.Count && em.SelectedEdgeB < em.Vertices.Count)
+            {
+                LineRenderer.AddLine(wire, em.Vertices[em.SelectedEdgeA], em.Vertices[em.SelectedEdgeB], selColor);
+            }
+
             _editWireframe.SetData(wire.ToArray());
 
             List<float> pts = new List<float>();
-            if (!faceMode)
+            if (vertexMode)
             {
                 for (int i = 0; i < em.Vertices.Count; i++)
                 {

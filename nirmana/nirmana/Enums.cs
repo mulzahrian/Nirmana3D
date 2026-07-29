@@ -1,7 +1,7 @@
 ﻿namespace nirmana
 {
-    /// <summary>Mode seleksi di Edit Mode mesh: pilih per-vertex atau per-face.</summary>
-    internal enum EditSelectionMode { Vertex, Face }
+    /// <summary>Mode seleksi di Edit Mode mesh: pilih per-vertex, per-edge, atau per-face.</summary>
+    internal enum EditSelectionMode { Vertex, Edge, Face }
 
     /// <summary>Gizmo transform yang sedang aktif di viewport.</summary>
     internal enum GizmoMode { Translate, Rotate, Scale }

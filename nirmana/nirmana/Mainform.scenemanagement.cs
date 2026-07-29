@@ -15,6 +15,24 @@ namespace nirmana
             AddObject(mesh, em, "Cube", Vector3.Zero, min, max);
         }
 
+        private void AddRoundedBoxDialog()
+        {
+            using (RoundedCubeDialog dialog = new RoundedCubeDialog())
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+                EditableMesh em = RoundedBoxGenerator.Create(
+                    dialog.BoxSize, dialog.BoxSize, dialog.BoxSize,
+                    dialog.CornerRadius, dialog.Segments);
+
+                Mesh mesh = em.BuildRenderMesh();
+                var (min, max) = em.ComputeBounds();
+                AddObject(mesh, em, "RoundedBox", Vector3.Zero, min, max);
+            }
+
+            _glControl?.Focus();
+        }
+
         private void AddObject(Mesh mesh, EditableMesh editMesh, string name, Vector3 position, Vector3 boundsMin, Vector3 boundsMax)
         {
             SceneObject obj = new SceneObject
