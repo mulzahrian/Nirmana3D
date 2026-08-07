@@ -122,6 +122,11 @@
     <Compile Include="Forms\MainForm\MainForm.UI.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Objects\CubeTemplate.cs" />
+    <Compile Include="Objects\IObjectTemplate.cs" />
+    <Compile Include="Objects\ObjectTemplateRegistry.cs" />
+    <Compile Include="Objects\RoundedBoxTemplate.cs" />
+    <Compile Include="Objects\SphereTemplate.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Rendering\Core\GizmoGeometry.cs" />

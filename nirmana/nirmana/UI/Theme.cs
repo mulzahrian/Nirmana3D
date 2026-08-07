@@ -22,9 +22,12 @@ namespace nirmana.UI
         public static readonly Color AccentPressed = Color.FromArgb(255, 108, 50, 182);
         public static readonly Color AccentDim = Color.FromArgb(255, 70, 46, 102);         // ungu redup (border, garis pemisah)
 
-        public static readonly Color TextPrimary = Color.FromArgb(255, 235, 230, 242);
-        public static readonly Color TextSecondary = Color.FromArgb(255, 170, 158, 190);
-        public static readonly Color TextDisabled = Color.FromArgb(255, 100, 90, 115);
+        // Semua teks dibikin putih polos — sebelumnya TextSecondary pakai
+        // abu-abu keunguan yang kontrasnya kurang di atas background ungu
+        // gelap, bikin beberapa teks nyaris tak kelihatan.
+        public static readonly Color TextPrimary = Color.White;
+        public static readonly Color TextSecondary = Color.White;
+        public static readonly Color TextDisabled = Color.FromArgb(255, 150, 140, 165);
 
         public static readonly Font UiFont = new Font("Segoe UI", 9f, FontStyle.Regular);
         public static readonly Font UiFontBold = new Font("Segoe UI", 9f, FontStyle.Bold);
@@ -45,6 +48,25 @@ namespace nirmana.UI
             menu.ForeColor = TextPrimary;
             menu.Font = UiFont;
             menu.Renderer = new ToolStripProfessionalRenderer(new DarkPurpleColorTable());
+        }
+
+        /// <summary>
+        /// Paksa warna teks putih ke SEMUA item menu, termasuk yang ada di
+        /// dalam dropdown (File > Open, dst). Perlu dipanggil manual SETELAH
+        /// semua menu.Items & DropDownItems selesai dirakit, karena
+        /// ToolStripMenuItem tidak selalu otomatis mewarisi ForeColor dari
+        /// MenuStrip induknya — beda dengan Control biasa.
+        /// </summary>
+        public static void ApplyMenuTextColor(ToolStripItemCollection items)
+        {
+            foreach (ToolStripItem item in items)
+            {
+                item.ForeColor = TextPrimary;
+                if (item is ToolStripMenuItem menuItem && menuItem.HasDropDownItems)
+                {
+                    ApplyMenuTextColor(menuItem.DropDownItems);
+                }
+            }
         }
 
         public static void StylePanel(Panel panel)
