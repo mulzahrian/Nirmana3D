@@ -62,6 +62,7 @@ namespace nirmana
 
             MainMenuStrip = menu;
             Controls.Add(menu);
+            Theme.ApplyMenuTextColor(menu.Items);
         }
 
         private void BuildTimelinePanel()
