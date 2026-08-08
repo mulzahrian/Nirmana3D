@@ -122,6 +122,7 @@
     <Compile Include="Forms\MainForm\MainForm.UI.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Objects\ConeTemplate.cs" />
     <Compile Include="Objects\CubeTemplate.cs" />
     <Compile Include="Objects\IObjectTemplate.cs" />
     <Compile Include="Objects\ObjectTemplateRegistry.cs" />
@@ -137,6 +138,7 @@
     <Compile Include="Rendering\Core\Shader.cs" />
     <Compile Include="Rendering\Core\Texture.cs" />
     <Compile Include="Rendering\Core\ViewportMath.cs" />
+    <Compile Include="Rendering\MeshEditing\ConeGenerator.cs" />
     <Compile Include="Rendering\MeshEditing\EdgeBevelOperation.cs" />
     <Compile Include="Rendering\MeshEditing\EditableMesh.cs" />
     <Compile Include="Rendering\MeshEditing\Operations.cs" />
